@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -5,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "http_error.h"
@@ -28,18 +30,39 @@ int set_nonblock(evutil_socket_t fd)
 #endif
 }
 //-----------------------------------------
-int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, char* work)
+/**
+ * @brief Parse a decimal number in [@p min, @p max] (the whole string must be a number).
+ * @return true on success, @p value is set then.
+ */
+static bool parse_number(const char* str, unsigned long min, unsigned long max,
+                         unsigned long* value)
 {
+    if (!str || *str < '0' || *str > '9')
+        return false;
+    char* end = NULL;
+    errno = 0;
+    unsigned long v = strtoul(str, &end, 10);
+    if (errno || *end || v < min || v > max)
+        return false;
+    *value = v;
+    return true;
+}
+int http_server_config_init(srv_conf* conf, const char* path, const char* port, const char* ip,
+                            const char* work)
+{
+    unsigned long number = 0;
     //-----------------------
-    const uint16_t max_port = 65535U;
-    if (!port || (conf->port = atoi(port)) > max_port) {
+    if (parse_number(port, 1U, 65535U, &number)) {
+        conf->port = (uint16_t)number;
+    } else {
         my_errno = HTTP_ERR_INPUT;
         fprintf(stderr, "%s\n", strmyerror());
         conf->port = 8080;
     }
     //-----------------------
     struct stat sb;
-    if (path && stat(path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+    if (path && strlen(path) < sizeof(conf->folder_path) && stat(path, &sb) == 0 &&
+        S_ISDIR(sb.st_mode)) {
         strcpy(conf->folder_path, path);
     } else {
         my_errno = HTTP_ERR_INPUT;
@@ -47,7 +70,8 @@ int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, ch
         strcpy(conf->folder_path, "data/");
     }
     //-----------------------
-    if (ip && strlen(ip) < HTTP_IPSTRLENGTH) {
+    struct in_addr addr;
+    if (ip && strlen(ip) < HTTP_IPSTRLENGTH && inet_pton(AF_INET, ip, &addr) == 1) {
         strcpy(conf->ip, ip);
     } else {
         my_errno = HTTP_ERR_INPUT;
@@ -55,30 +79,19 @@ int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, ch
         strcpy(conf->ip, "0.0.0.0");
     }
     //-----------------------
-    if (!work || (conf->workers = atoi(work)) > HTTP_MAX_WORKERS) {
+    if (parse_number(work, 1U, HTTP_MAX_WORKERS, &number)) {
+        conf->workers = (wc_t)number;
+    } else {
         my_errno = HTTP_ERR_INPUT;
         fprintf(stderr, "%s\n", strmyerror());
         conf->workers = 4U;
     }
-    //-----------------------
-    if (!(conf->child_workers = calloc(conf->workers, sizeof(*conf->child_workers)))) {
-        perror("child_workers");
-        exit(EXIT_FAILURE);
-    }
-
-    for (wc_t i = 0U; i < conf->workers; ++i) {
-        if (!child_worker_init(&conf->child_workers[i])) {
-            conf->myself = &conf->child_workers[i];
-            conf->workers = (i + 1);
-            break;
-        } else
-            (conf->myself = NULL);
-    }
+    conf->myself = NULL;
+    conf->child_workers = NULL;
     //-----------------------
     /* exec working directory */
-
-    int bytes = 0U;
-    if (0 >= (bytes = readlink("/proc/self/exe", conf->server_path, FILENAME_MAX - 1U))) {
+    ssize_t bytes = readlink("/proc/self/exe", conf->server_path, FILENAME_MAX - 1U);
+    if (bytes <= 0) {
         fprintf(stderr, "%s\n", strerror(errno));
         strcpy(conf->server_path, "");
     } else
@@ -87,6 +100,44 @@ int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, ch
     conf->ptr_server_name = HTTP_SERVER_NAME;
     //-----------------------
     return 0;
+}
+int http_server_workers_start(srv_conf* conf)
+{
+    if (!(conf->child_workers = calloc(conf->workers, sizeof(*conf->child_workers)))) {
+        perror("child_workers");
+        exit(EXIT_FAILURE);
+    }
+
+    conf->myself = NULL;
+    for (wc_t i = 0U; i < conf->workers; ++i) {
+        if (!child_worker_init(&conf->child_workers[i])) {
+            /* A worker keeps only its own end of the socketpairs */
+            for (wc_t k = 0U; k < i; ++k) {
+                child_worker_free(&conf->child_workers[k]);
+            }
+            conf->myself = &conf->child_workers[i];
+            conf->workers = (i + 1);
+            break;
+        }
+    }
+    return 0;
+}
+void http_server_workers_stop(srv_conf* conf)
+{
+    if (!conf->child_workers)
+        return;
+    if (conf->myself) {
+        child_worker_free(conf->myself);
+    } else {
+        /* Workers see the end of stream and leave their event loops */
+        for (wc_t i = 0U; i < conf->workers; ++i)
+            child_worker_free(&conf->child_workers[i]);
+        for (wc_t i = 0U; i < conf->workers; ++i)
+            waitpid(conf->child_workers[i].pid, NULL, 0);
+    }
+    free(conf->child_workers);
+    conf->child_workers = NULL;
+    conf->myself = NULL;
 }
 void http_server_config_print(srv_conf* conf, FILE* stream)
 {
