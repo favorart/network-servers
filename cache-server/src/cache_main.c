@@ -1,7 +1,19 @@
-#include "stdafx.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "cache_error.h"
 #include "cache_hash.h"
 #include "cache.h"
+
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
 
 //-----------------------------------------
 struct server_config server_conf = {0};
@@ -10,18 +22,17 @@ int main(int argc, char** argv)
 {
     int result = 0;
 
+    if (argc > 1 && (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version"))) {
+        printf("%s\n", NS_VERSION);
+        return 0;
+    }
+
     //-------------------------------------------
     /* Master Process */
     server_conf.ht = malloc(sizeof(struct hash_table));
     hashtable_init(server_conf.ht, CACHELINES, CACHE_SIZE);
 
     //-------------------------------------------
-    /* Read the server configuration from the command-line parameters */
-    // if ( parse_console_parameters (argc, argv, &server_conf) )
-    // { fprintf (stderr, "%s\n", strerror (errno));
-    //   result = 1;
-    //   goto MARK_FREE;
-    // }
     server_config_init(&server_conf, NULL, NULL, NULL);
 
     int MasterSocket = -1;

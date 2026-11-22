@@ -1,25 +1,19 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <time.h>
+
 #include "cache_error.h"
 #include "cache_hash.h"
 #include "cache.h"
 
 void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf_out);
 //-----------------------------------------
-void cache_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
-{
-    // struct event_base *base = (struct event_base*) arg;
-    struct server_config* server_conf = (struct server_config*)arg;
-    //----------------------------------------------------------------------
-    int err = EVUTIL_SOCKET_ERROR();
-    fprintf(stderr,
-            "Got an error %d (%s) on the listener. "
-            "Shutting down.\n",
-            err, evutil_socket_error_to_string(err));
-    //----------------------------------------------------------------------
-    event_base_loopexit(server_conf->base, NULL);
-}
 void cache_accept_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)ev;
     struct server_config* server_conf = (struct server_config*)arg;
     //----------------------------------------------------------------------
     int SlaveSocket = accept(fd, 0, 0);
@@ -41,6 +35,8 @@ void cache_accept_cb(evutil_socket_t fd, short ev, void* arg)
 //-----------------------------------------
 void cache_connect_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)fd;
+    (void)ev;
     struct server_config* server_conf = (struct server_config*)arg;
     //----------------------------------------------------------------------
     /* Making the new client */
@@ -78,6 +74,7 @@ void cache_connect_cb(evutil_socket_t fd, short ev, void* arg)
 //-----------------------------------------
 void cache_error_cb(struct bufferevent* b_ev, short events, void* arg)
 {
+    (void)b_ev;
     /*   An event structure becomes a timeout trigger via the function timeout_set().
      *   Naturally, the trigger has to be "armed" - the function timeout_add() does that.
      *   To "disarm" the trigger and cancel the timeout event, use
@@ -100,7 +97,7 @@ void cache_error_cb(struct bufferevent* b_ev, short events, void* arg)
         struct client* Client = (struct client*)arg;
 
 #ifdef _DEBUG
-        printf("got a close. length = %u\n",
+        printf("got a close. length = %zu\n",
                evbuffer_get_length(bufferevent_get_input(Client->b_ev)));
 #endif // _DEBUG
 
@@ -164,10 +161,10 @@ void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf
 
     while ((cmd = evbuffer_readln(buf_in, &cmd_length, EVBUFFER_EOL_ANY))) {
         char* cmd_cur_char = cmd;
-        size_t n = 0;
+        int n = 0;
         //-----------------------------------------------------------------
         ht_rec hd = {0};
-        char cmd_head[3];
+        char cmd_head[4];
 
         /* try to read the command */
         if (1 == sscanf(cmd_cur_char, "%3s%n", cmd_head, &n)) {
@@ -230,79 +227,7 @@ void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf
         free(cmd);
     }
     //-----------------------------------------------------------------
-HNDL_FREE:;
-    free(cmd);
     evbuffer_drain(buf_in, -1);
     return;
 }
-//-----------------------------------------
-#ifdef _DEBUG_HASH
-#define TESTS 25
-int main()
-{
-    hashtable ht = {0};
-    hashtable_init(&ht, 20, 0);
-
-    // struct evbuffer *buf = evbuffer_new ();
-
-    int32_t inkeys = 0;
-    int32_t nkeys[TESTS] = {0};
-    int32_t ykeys[TESTS] = {0};
-    int32_t iykeys = 0;
-
-    ht_rec hd = {0};
-
-    srand((unsigned int)clock());
-    for (int i = 0; i < 25; ++i) {
-        int32_t ttl = rand() % 5 + 2, key = rand() % 20, val = 1;
-
-        if (ttl >= 4) {
-            ykeys[iykeys++] = key;
-        } else {
-            nkeys[inkeys++] = key;
-        }
-
-        hd.val = val;
-        hd.key = key;
-        hd.ttl = ttl_converted(ttl);
-        if (hashtable_set(&ht, &hd)) {
-            printf("error insert: %d\n", key);
-        } else
-            printf("key=%d  ", key);
-
-        // evbuffer_add_printf (buf, "set %d %d %d\n", ttl, key, val);
-    } // cache_handling  (&ht, buf, NULL);
-
-    hashtable_print_debug(&ht, stdout);
-
-    sleep(4);
-
-    for (int i = 0; i < iykeys; ++i) {
-        // int32_t key = rand () % 5 + 2;
-        // evbuffer_add_printf (buf, "get %d\n", keys[i]);
-
-        hd.key = ykeys[i];
-        if (hashtable_get(&ht, &hd)) {
-            printf("error hash must yes: %d\n", ykeys[i]);
-        }
-    }
-    for (int i = 0; i < inkeys; ++i) {
-        // int32_t key = rand () % 5 + 2;
-        // evbuffer_add_printf (buf, "get %d\n", keys[i]);
-
-        hd.key = nkeys[i];
-        if (!hashtable_get(&ht, &hd)) {
-            printf("error hash: key=%d  ttl=%lf\n", nkeys[i], difftime(time(NULL), hd.ttl));
-        }
-    }
-    // cache_handling  (&ht, buf, NULL);
-
-    hashtable_print_debug(&ht, stdout);
-
-    hashtable_free(&ht);
-    // evbuffer_free  (buf);
-
-    return 0;
-}
-#endif // _DEBUG_HASH
 //-----------------------------------------

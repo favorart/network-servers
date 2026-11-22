@@ -1,7 +1,18 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <signal.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "cache_error.h"
 #include "cache.h"
 
+//-----------------------------------------
+myerr my_errno = SRV_ERR_NONE;
 //-----------------------------------------
 void signal_handler(int sig)
 {
@@ -11,25 +22,13 @@ void signal_handler(int sig)
         }
         kill(getpid(), SIGTERM);
     } else if (sig == SIGCHLD) {
-        while (true) {
-            int status;
-            int pid = waitpid(WAIT_ANY, &status, WNOHANG);
-            if (pid < 0) {
-                perror("waitpid");
-                break;
-            }
-            // else if ( pid == 0 )
-            {
-                break;
-            }
-            // notice_termination (pid, status);
-        }
+        int status;
+        if (waitpid(WAIT_ANY, &status, WNOHANG) < 0)
+            perror("waitpid");
     }
-    // else if ( sig == SIGTERM )
-    // { event_loopexit (base, NULL); }
 }
 //-----------------------------------------
-const char* strmyerror()
+const char* strmyerror(void)
 {
     const char* strerr;
     switch (my_errno) {
@@ -62,25 +61,22 @@ const char* strmyerror()
 int set_nonblock(evutil_socket_t fd)
 {
     int flags;
-#ifdef O_NONBLOCK
     if (-1 == (flags = fcntl(fd, F_GETFL, 0)))
         flags = 0;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-#else
-    flags = 1;
-    return ioctl(fd, FIOBIO, &flags);
-#endif
 }
 //-----------------------------------------
 int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
 {
-    bool fail = false;
     //-----------------------
-    const uint16_t max_port = 65535U;
-    if (!port || (conf->port = atoi(port)) > max_port) {
+    const long max_port = 65535L;
+    long port_value = port ? atol(port) : 0L;
+    if (!port || port_value > max_port) {
         my_errno = SRV_ERR_INPUT;
         fprintf(stderr, "%s\n", strmyerror());
         conf->port = 8080;
+    } else {
+        conf->port = (uint16_t)port_value;
     }
     //-----------------------
     if (ip && strlen(ip) < SRV_IPSTRLENGTH) {
@@ -93,7 +89,7 @@ int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
     //-----------------------
     conf->ptr_server_name = SRV_SERVER_NAME;
     //-----------------------
-    int bytes = 0U;
+    ssize_t bytes = 0;
     if (0 >= (bytes = readlink("/proc/self/exe", conf->server_path, FILENAME_MAX - 1U))) {
         fprintf(stderr, "%s\n", strerror(errno));
         strcpy(conf->server_path, "");
@@ -122,11 +118,7 @@ int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
             (conf->myself = NULL);
     }
     //-----------------------
-CONF_FREE:;
-    if (fail)
-        server_config_free(conf);
-    //-----------------------
-    return fail;
+    return 0;
 }
 void server_config_print(srv_conf* conf, FILE* stream)
 {
@@ -145,10 +137,8 @@ void server_config_free(srv_conf* conf)
     memset(conf, 0, sizeof(*conf));
 }
 //-----------------------------------------
-#include <getopt.h> /* for getopt_long finction */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf)
 {
-    char* conf_opt = NULL;
     static struct option long_options[] = {{"conf", required_argument, 0, 'c'}, {0, 0, 0, 0}};
     //-----------------------
     int c, option_index = 0;
@@ -159,7 +149,7 @@ int parse_console_parameters(int argc, char** argv, srv_conf* conf)
             break;
 
         case 'c':
-            conf_opt = optarg;
+            /* the config file is not supported yet */
             break;
 
         case '?':

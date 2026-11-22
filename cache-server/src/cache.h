@@ -1,7 +1,11 @@
-#include "stdafx.h"
-
 #ifndef _CACHE_H_
 #define _CACHE_H_
+
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
+
+#include <event.h>
 /* ! LINUX ARCHITECTURE !
  *
  *  v   Build with make.
@@ -65,7 +69,7 @@ typedef struct server_config srv_conf;
 struct server_config
 {
     //-----------------------
-    char* ptr_server_name;
+    const char* ptr_server_name;
     //-----------------------
     uint16_t port;
     char ip[SRV_IPSTRLENGTH];
@@ -124,8 +128,6 @@ struct client
 //-----------------------------------------
 /** @brief Listener callback: accept a connection and pass it to a random worker. */
 void cache_accept_cb(evutil_socket_t fd, short ev, void* arg);
-/** @brief Listener error callback: log the error and stop the event loop. */
-void cache_ac_err_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
 /**
  * @brief Worker callback: receive a client fd from the master and start serving it.

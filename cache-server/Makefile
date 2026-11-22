@@ -1,20 +1,44 @@
-# Builds the cache-server binary from the sources as they are (Linux only).
-BIN      := cache-server
-SRCS     := $(wildcard *.c)
+# cache-server (Linux only): make [all|test|clean|print-bin] [SAN=1] [RUN='setarch -R']
+BIN     := cache-server
+BUILD   := build$(if $(SAN),-san)
 
-CFLAGS   ?= -O2 -g
-override CFLAGS += -std=gnu11 -fcommon -fgnu89-inline
-LDLIBS   += -levent -lpthread
+SRCS     := $(wildcard src/*.c)
+MAIN_SRC := src/cache_main.c
+OBJS     := $(SRCS:src/%.c=$(BUILD)/%.o)
+LIB_OBJS := $(filter-out $(BUILD)/cache_main.o,$(OBJS))
 
-$(BIN): $(SRCS) $(wildcard *.h)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(SRCS) -o $@ $(LDFLAGS) $(LDLIBS)
+CFLAGS ?= -O2 -g
+override CFLAGS += -std=gnu11 -Wall -Wextra -Wpedantic -Werror
+override CPPFLAGS += -MMD -MP
+ifneq ($(SAN),)
+SANFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+override CFLAGS += $(SANFLAGS)
+override LDFLAGS += $(SANFLAGS)
+endif
+LDLIBS += -levent
 
-all: $(BIN)
+# Prefix for running test binaries, e.g. RUN='setarch -R' for ASan under WSL.
+RUN ?=
+
+all: $(BUILD)/$(BIN)
+
+$(BUILD)/$(BIN): $(OBJS)
+	$(CC) $(LDFLAGS) $^ -o $@ $(LDLIBS)
+
+$(BUILD)/%.o: src/%.c | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD):
+	mkdir -p $@
+
+test: all
 
 clean:
-	rm -f $(BIN)
+	rm -rf build build-san
 
 print-bin:
-	@echo $(BIN)
+	@echo $(BUILD)/$(BIN)
 
-.PHONY: all clean print-bin
+-include $(OBJS:.o=.d)
+
+.PHONY: all test clean print-bin

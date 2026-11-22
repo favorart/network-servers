@@ -1,4 +1,6 @@
-#include "stdafx.h"
+#include <stdio.h>
+#include <string.h>
+
 #include "cache_error.h"
 #include "cache_hash.h"
 
@@ -9,7 +11,7 @@ time_t ttl_converted(int32_t ttl)
 {
     return (time(NULL) + ttl);
 }
-bool ttl_completed(time_t ttl)
+static bool ttl_completed(time_t ttl)
 {
     return (difftime(time(NULL), ttl) > TIME_EPS);
 }
@@ -30,7 +32,6 @@ void hashtable_init(hashtable* ht, size_t lines_count, size_t shm_size)
     ht->shmemory = mem;
     ht->lines = (ht_line*)ht->shmemory;
 #endif // _DEBUG
-#ifdef _LOCK
     mysem_val_t val = 1;
     /* Create one semaphore, initialized */
     ht->tb_semid = mysem_create(1U, &val);
@@ -41,16 +42,13 @@ void hashtable_init(hashtable* ht, size_t lines_count, size_t shm_size)
 
     /* Initialize the shared memory */
     memset(ht->shmemory, 0, shm_size);
-#endif // _LOCK
     //-----------------------------------------
     return;
 }
 void hashtable_free(hashtable* ht)
 {
-#ifdef _LOCK
     myshm_remove(ht->tb_shmid);
     mysem_remove(ht->tb_semid);
-#endif // _LOCK
 }
 //-----------------------------------------
 // std::hash<string>
@@ -59,7 +57,7 @@ static hash_t hash(int32_t key)
     char* k = (char*)&key;
     uint32_t h = 2139062143;
 
-    for (int i = 0; i < sizeof(key); ++i)
+    for (size_t i = 0; i < sizeof(key); ++i)
         h = h * 37 + k[i];
 
     return (hash_t)h;
@@ -68,22 +66,11 @@ static hash_t hashtable_walk(hashtable* ht, ht_rec* data, hash_t he, bool isget)
 {
     hash_t h = he, h_ret = h;
     //-----------------------------------------
-#ifdef _DEBUG_HASH
-    printf("hash=% 3d  key=% 3d  ttl=% 2lf", he, data->key, difftime(time(NULL), data->ttl));
-    if (isget)
-        printf("\nh=%d he=%d [h]=%d", h, he, ht->lines[h].busy);
-#endif // _DEBUG_HASH
-
     /* walk along the open addressing */
     while ((h < ht->lines_count) && ht->lines[h].busy) {
         hash_t hn = hash(ht->lines[h + 1U].data.key) % ht->lines_count;
         /* if we meet an expired ttl */
         if (ttl_completed(ht->lines[h].data.ttl)) {
-#ifdef _DEBUG_HASH
-            if (isget)
-                printf("\nh+1=%d hn=%d he=%d [h+1]=%d", h + 1, hn, he, ht->lines[h + 1U].busy);
-#endif // _DEBUG_HASH
-
             /* if there is nothing ahead in the open addressing */
             if (((h + 1U) >= ht->lines_count) || !ht->lines[h + 1U].busy ||
                 ((h + 1U) == hn)
@@ -98,17 +85,8 @@ static hash_t hashtable_walk(hashtable* ht, ht_rec* data, hash_t he, bool isget)
             /* while in the open addressing: the index of the next element is greater than its hash
              */
             while ((h < ht->lines_count) && ht->lines[h].busy && (h > hn)) {
-#ifdef _DEBUG_HASH
-                if (isget)
-                    printf("h=%d hn=%d\n", h, hn);
-#endif // _DEBUG_HASH
                 hn = hash(ht->lines[++h].data.key) % ht->lines_count;
             }
-
-#ifdef _DEBUG_HASH
-            if (isget)
-                printf("h=%d hc=%d\n", h, hc);
-#endif // _DEBUG_HASH
 
             /* shift the next one into this place */
             memmove(&ht->lines[hc - 1U], &ht->lines[hc], (h - hc) * sizeof(ht_line));
@@ -139,12 +117,6 @@ static hash_t hashtable_walk(hashtable* ht, ht_rec* data, hash_t he, bool isget)
 
             h_ret = hc;
             break;
-
-            // printf ("\n\n>>%d\n", h);
-            // hashtable_print_debug (ht, stdout);
-            // printf ("\n");
-            // hashtable_print_debug (ht, stdout);
-            // printf ("\n");
         }
 
         ++h;
@@ -156,9 +128,7 @@ static hash_t hashtable_walk(hashtable* ht, ht_rec* data, hash_t he, bool isget)
 //-----------------------------------------
 bool hashtable_get(hashtable* ht, ht_rec* data)
 {
-#ifdef _LOCK
     mysem_lock(ht->tb_semid, 0);
-#endif // _LOCK
 
     hash_t he = hash(data->key) % ht->lines_count;
     //-----------------------------------------
@@ -169,27 +139,17 @@ bool hashtable_get(hashtable* ht, ht_rec* data)
         h = ht->lines_count;
     }
     //-----------------------------------------
-#ifdef _DEBUG_HASH
-    FILE* f = fopen("output.txt", "at");
-    hashtable_print_debug(ht, f);
-    fclose(f);
-#endif // _DEBUG_HASH
-       //-----------------------------------------
 #ifdef _DEBUG
     printf("get he=%d h=%d\n", he, h);
 #endif // _DEBUG
 
-#ifdef _LOCK
     mysem_unlock(ht->tb_semid, 0);
-#endif // _LOCK
     //-----------------------------------------
     return (h == ht->lines_count);
 }
 bool hashtable_set(hashtable* ht, ht_rec* data)
 {
-#ifdef _LOCK
     mysem_lock(ht->tb_semid, 0);
-#endif // _LOCK
 
     hash_t he = hash(data->key) % ht->lines_count;
     //-----------------------------------------
@@ -199,27 +159,9 @@ bool hashtable_set(hashtable* ht, ht_rec* data)
         ht->lines[h].busy = true;
     } else
         h = ht->lines_count;
-        //-----------------------------------------
-
-#ifdef _LOCK
+    //-----------------------------------------
     mysem_unlock(ht->tb_semid, 0);
-#endif // _LOCK
     //-----------------------------------------
     return (h == ht->lines_count);
 }
-//-----------------------------------------
-#ifdef _DEBUG_HASH
-void hashtable_print_debug(hashtable* ht, FILE* f)
-{
-    fprintf(f, "\n");
-    for (size_t i = 0U; i < ht->lines_count; ++i) {
-        fprintf(f, "%3u hash=%2d  %s key=%2d ttl=% 3.2lf val=%d\n", i,
-                (ht->lines[i].busy ? hash(ht->lines[i].data.key) % ht->lines_count : -1),
-                (ht->lines[i].busy ? "Busy" : "Free"), ht->lines[i].data.key,
-                !ht->lines[i].data.ttl ? 0. : difftime(time(NULL), ht->lines[i].data.ttl),
-                ht->lines[i].data.val);
-    }
-    return;
-}
-#endif // _DEBUG_HASH
 //------------------------------------------

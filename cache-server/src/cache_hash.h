@@ -1,48 +1,12 @@
-#include "stdafx.h"
-
-#ifndef _MYSEM_MYSHM_H_
-#define _MYSEM_MYSHM_H_
-#define _LOCK
-//-----------------------------------------
-typedef int myshm_t;
-typedef int mysem_t;
-typedef unsigned short mysem_val_t;
-typedef unsigned short mysem_inx_t;
-
-/**
- * @brief Open an existing System V semaphore set.
- * @return Semaphore set id, -1 on error.
- */
-inline mysem_t mysem_open(key_t key);
-/**
- * @brief Create a private set of @p num semaphores with initial values @p vals.
- * @return Semaphore set id (exits on error).
- */
-inline mysem_t mysem_create(mysem_inx_t num, mysem_val_t* vals);
-/** @brief Decrement (lock) semaphore @p member, blocking; exits on error. */
-inline void mysem_lock(mysem_t sid, mysem_inx_t member);
-/** @brief Increment (unlock) semaphore @p member; exits on error. */
-inline void mysem_unlock(mysem_t sid, mysem_inx_t member);
-/** @brief Remove the semaphore set; exits on error. */
-inline void mysem_remove(mysem_t sid);
-
-/**
- * @brief Create a private System V shared memory segment of @p size bytes.
- * @return Segment id (exits on error).
- */
-inline myshm_t myshm_create(size_t size);
-/** @brief Mark the shared memory segment for removal. */
-inline void myshm_remove(myshm_t mid);
-/**
- * @brief Attach the shared memory segment to this process.
- * @return Address of the segment.
- */
-inline char* myshm_append(myshm_t mid);
-//-----------------------------------------
-#endif // _MYSEM_MYSHM_H_
-//=========================================
 #ifndef _CACHE_HASH_H_
 #define _CACHE_HASH_H_
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+#include "cache_sysv.h"
 //-----------------------------------------
 #define CACHE_SIZE 1024U * 1024U /* bytes */
 #define CACHELINES 256U
@@ -64,7 +28,7 @@ typedef struct hashtable_line ht_line;
 /** @brief Hash table slot: a record and its busy flag. */
 struct hashtable_line
 {
-    bool /*rip,*/ busy;
+    bool busy;
     ht_rec data;
 };
 //-----------------------------------------
@@ -78,16 +42,12 @@ struct hash_table
     size_t lines_count;
     ht_line* lines;
     //------------------------
-#ifdef _LOCK
-    mysem_t ln_semid;
     mysem_t tb_semid;
     myshm_t tb_shmid;
-#endif // _LOCK
-       //------------------------
 };
 //-----------------------------------------
 /** @brief Convert a relative TTL in seconds to an absolute time. */
-clock_t ttl_converted(int32_t ttl);
+time_t ttl_converted(int32_t ttl);
 //-----------------------------------------
 /**
  * @brief Create the table in shared memory and its semaphore.
@@ -108,10 +68,5 @@ bool hashtable_get(hashtable* ht, ht_rec* data);
  * @return false on success, true if there is no room for it.
  */
 bool hashtable_set(hashtable* ht, ht_rec* data);
-//-----------------------------------------
-#ifdef _DEBUG_HASH
-/** @brief Print all slots to @p f (only with _DEBUG_HASH). */
-void hashtable_print_debug(hashtable* ht, FILE* f);
-#endif // _DEBUG_HASH
 //-----------------------------------------
 #endif // _CACHE_HASH_H_

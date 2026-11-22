@@ -1,42 +1,23 @@
-#include "stdafx.h"
-#include "cache_hash.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/ipc.h>
+#include <sys/sem.h>
+#include <sys/shm.h>
+#include <sys/stat.h>
 
-#ifdef _LOCK
-//-----------------------------------------
-// #if defined(__GNU_LIBRARY__) && !defined(_SEM_SEMUN_UNDEFINED)
-// // definition in <sys/sem.h>
-// #else
-// // We define:
-// union semun
-// {
-//   int val;                 /* value  for SETVAL             */
-//   struct semid_ds *buf;    /* buffer for IPC_STAT, IPC_SET  */
-//   unsigned short  *array;  /* array  for GETALL, SETALL     */
-//   struct seminfo  *__buf;  /* buffer for IPC_INFO           */
-// };
-// #endif
+#include "cache_sysv.h"
 
 #define MY_PERM (S_IRUSR | S_IWUSR) // (|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH)
 //-----------------------------------------
 #define MYSEM_NMBR_MAX 257U
 
-/* error - return -1 */
-mysem_t mysem_open(key_t key)
-{
-    //-----------------------------------------
-    /* Open the semaphore set */
-    return semget(key, 0, MY_PERM);
-}
 mysem_t mysem_create(mysem_inx_t num, mysem_val_t* vals)
 {
-    if (0 > num || num > MYSEM_NMBR_MAX) {
+    if (num > MYSEM_NMBR_MAX) {
         perror("max sems");
         exit(EXIT_FAILURE);
     }
     //-----------------------------------------
-    /* Create a special key by calling ftok() */
-    // key = ftok (".", 'h');
-
     mysem_t sid = semget(IPC_PRIVATE, num, IPC_CREAT | IPC_EXCL | MY_PERM);
     if (sid == -1) {
         perror("mysem exists");
@@ -75,26 +56,7 @@ void mysem_remove(mysem_t sid)
     if (0 > semctl(sid, 0, IPC_RMID, 0)) {
         perror("shm_remid");
         exit(EXIT_FAILURE);
-    } // printf ("Semaphore removed\n");
-}
-
-mysem_val_t mysem_getval(mysem_t sid, mysem_inx_t inx)
-{
-    return semctl(sid, inx, GETVAL, 0);
-}
-void mysem_chperm(mysem_t sid, char* perm)
-{
-    struct semid_ds mysemds;
-    /* Get the current value of the internal data structure */
-    int rc = semctl(sid, 0, IPC_STAT, &mysemds);
-    if (rc == -1) {
-        perror("semctl chperm");
-        exit(EXIT_FAILURE);
     }
-    /* Change the access permissions of the semaphore */
-    sscanf(perm, "%ho", &mysemds.sem_perm.mode);
-    /* Update the internal data structure */
-    semctl(sid, 0, IPC_SET, &mysemds);
 }
 //-----------------------------------------
 myshm_t myshm_create(size_t size)
@@ -120,4 +82,3 @@ char* myshm_append(myshm_t mid)
     return (char*)shm;
 }
 //-----------------------------------------
-#endif // _LOCK

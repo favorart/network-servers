@@ -1,5 +1,3 @@
-#include "stdafx.h"
-
 #ifndef _CACHE_ERROR_H_
 #define _CACHE_ERROR_H_
 
@@ -16,7 +14,8 @@ typedef enum
     SRV_ERR_RFREE,
     SRV_ERR_FDTRS
 } myerr;
-myerr my_errno;
+/** @brief Last server error code (defined in cache_config.c). */
+extern myerr my_errno;
 //-----------------------------------------
 /** @brief Text for the current my_errno (NULL if none); resets my_errno. */
 const char* strmyerror(void);
