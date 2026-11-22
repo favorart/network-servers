@@ -1,5 +1,6 @@
 #ifndef _HTTP_SERVER_H_
 #define _HTTP_SERVER_H_
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -19,7 +20,8 @@ struct event_base;
  *  v   The <dir> directory holds html and jpeg files
  */
 //-----------------------------------------
-#define CHWMSG_MAXLEN 5
+/** @brief Length of a command on the wire ("task", "term"), sent without NUL. */
+#define CHWMSG_LENGTH 4
 /** @brief Command sent from the master process to a child worker. */
 typedef enum
 {
@@ -52,7 +54,7 @@ void child_worker_free(chw_t* chw);
 int child_worker_send(chw_t* chw, chwmsg_enum msg, fd_t fd);
 /**
  * @brief Receive a command and a passed file descriptor from the master.
- * @param msg Set to the received command.
+ * @param msg Set to the received command (CHWMSG_NONE if unknown).
  * @param fd  Set to the received descriptor, or -1 if none was passed.
  * @return Bytes received, or -1 on end of stream.
  */
@@ -61,6 +63,8 @@ int child_worker_recv(chw_t* chw, chwmsg_enum* msg, fd_t* fd);
 #define HTTP_SERVER_NAME "http-server-hw"
 #define HTTP_IPSTRLENGTH 16U
 #define HTTP_MAX_WORKERS 16U
+/** @brief Seconds to wait for the client to close after the response. */
+#define HTTP_LINGER_SEC 5
 
 typedef struct http_server_config srv_conf;
 /** @brief Server settings from the command line plus the worker table. */
@@ -83,21 +87,33 @@ struct http_server_config
 extern struct http_server_config server_conf;
 //-----------------------------------------
 /**
- * @brief Fill the config (invalid values fall back to defaults) and fork the workers.
+ * @brief Fill the config; invalid or missing values fall back to defaults.
  * @param path    Directory with the served files (default "data/").
- * @param port    Listening port (default 8080).
- * @param ip      Listening address (default "0.0.0.0").
- * @param workers Number of worker processes (default 4).
- * @return Always 0; in a child process @c conf->myself points to its worker.
+ * @param port    Listening port, 1..65535 (default 8080).
+ * @param ip      Listening IPv4 address (default "0.0.0.0").
+ * @param workers Number of worker processes, 1..HTTP_MAX_WORKERS (default 4).
+ * @return Always 0.
  */
-int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, char* workers);
+int http_server_config_init(srv_conf* conf, const char* path, const char* port, const char* ip,
+                            const char* workers);
 /** @brief Print the config to @p stream. */
 void http_server_config_print(srv_conf* conf, FILE* stream);
-/** @brief Zero the config (the worker table is not freed). */
+/** @brief Zero the config (call http_server_workers_stop() first). */
 void http_server_config_free(srv_conf* conf);
 //-----------------------------------------
 /**
- * @brief Parse -d/-h/-p/-w options and initialize @p conf.
+ * @brief Fork @c conf->workers worker processes (exits on failure).
+ * @return 0; in a worker @c conf->myself points to its own entry.
+ */
+int http_server_workers_start(srv_conf* conf);
+/**
+ * @brief Master: close the sockets to the workers (they exit on EOF) and wait for them.
+ *        Worker: close its own socket. Then free the worker table.
+ */
+void http_server_workers_stop(srv_conf* conf);
+//-----------------------------------------
+/**
+ * @brief Parse -d/-h/-p/-w options and initialize @p conf (-v prints the version and exits).
  * @return Result of http_server_config_init().
  */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf);
@@ -118,6 +134,8 @@ struct client
     struct event_base* base;
     //---------------------------
     struct http_request request;
+    bool closing; /**< the response is written: close once it is sent */
+    bool eof;     /**< the peer has closed its side */
 };
 //-----------------------------------------
 /** @brief Master: accept a connection and pass its socket to a random worker. */
@@ -126,9 +144,15 @@ void http_accept_cb(evutil_socket_t fd, short ev, void* arg);
 /** @brief Worker: receive a client socket from the master and set up its bufferevent. */
 void http_connect_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
-/** @brief Parse buffered requests and write the responses (@p arg is the client). */
+/**
+ * @brief Parse one request and write the response (@p arg is the client).
+ *
+ * The connection is closed after the response ("Connection: close") or a bad request.
+ */
 void http_read_cb(struct bufferevent* b_ev, void* arg);
-/** @brief On EOF or error: free the request, the bufferevent and the client. */
+/** @brief Once the response is sent: half-close the socket (or free the client after EOF). */
+void http_write_cb(struct bufferevent* b_ev, void* arg);
+/** @brief On EOF, error or timeout: free the request, the bufferevent and the client. */
 void http_error_cb(struct bufferevent* b_ev, short events, void* arg);
 //-----------------------------------------
 #endif // _HTTP_SERVER_H_

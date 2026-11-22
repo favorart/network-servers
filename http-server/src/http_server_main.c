@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <signal.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,11 +14,24 @@
 #include "http_server.h"
 
 //-----------------------------------------
+/** @brief Master: SIGTERM or SIGINT stops the event loop (@p arg is the event_base). */
+static void http_signal_cb(evutil_socket_t sig, short ev, void* arg)
+{
+    (void)sig;
+    (void)ev;
+    event_base_loopexit((struct event_base*)arg, NULL);
+}
+//-----------------------------------------
 int main(int argc, char** argv)
 {
     int result = 0;
     int MasterSocket = -1;
     struct event_base* base = NULL;
+    struct event* sig_term = NULL;
+    struct event* sig_int = NULL;
+
+    /* A client that disconnects early must not kill the process on write */
+    signal(SIGPIPE, SIG_IGN);
 
 #ifdef HTTP_SYSLOG
     // setlogmask (LOG_UPTO (LOG_NOTICE));
@@ -30,6 +44,7 @@ int main(int argc, char** argv)
         result = 1;
         goto MARK_FREE;
     }
+    http_server_workers_start(&server_conf);
 
     /* Master Process */
     if (!server_conf.myself) {
@@ -98,6 +113,15 @@ int main(int argc, char** argv)
         event_base_set(base, &ev);
         /* Add server event without timeout */
         event_add(&ev, NULL);
+
+        sig_term = evsignal_new(base, SIGTERM, http_signal_cb, base);
+        sig_int = evsignal_new(base, SIGINT, http_signal_cb, base);
+        if (!sig_term || !sig_int || event_add(sig_term, NULL) || event_add(sig_int, NULL)) {
+            my_errno = HTTP_ERR_LIBEV;
+            fprintf(stderr, "%s\n", strmyerror());
+            result = 1;
+            goto MARK_FREE;
+        }
     } else {
         event_set(&ev, server_conf.myself->fd, EV_READ | EV_PERSIST, http_connect_cb, base);
         event_base_set(base, &ev);
@@ -109,6 +133,10 @@ int main(int argc, char** argv)
 
 MARK_FREE:
     //-------------------------------------------
+    if (sig_term)
+        event_free(sig_term);
+    if (sig_int)
+        event_free(sig_int);
     if (base)
         event_base_free(base);
 
@@ -117,6 +145,8 @@ MARK_FREE:
         close(MasterSocket);
     }
 
+    /* The master waits for the workers to exit */
+    http_server_workers_stop(&server_conf);
     http_server_config_free(&server_conf);
 
     closelog();

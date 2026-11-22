@@ -82,7 +82,8 @@ static ssize_t sock_fd_read(int sock, void* buf, size_t buf_len, int* fd)
         msg.msg_controllen = sizeof(cmsgu.control);
 
         //-----------------------
-        if (0 > (size = recvmsg(sock, &msg, 0))) {
+        /* Commands have a fixed length: wait for all of it */
+        if (0 > (size = recvmsg(sock, &msg, MSG_WAITALL))) {
             perror("recvmsg");
             exit(EXIT_FAILURE);
         }
@@ -140,15 +141,18 @@ int child_worker_init(struct child_worker* chw)
 }
 void child_worker_free(struct child_worker* chw)
 {
-    close(chw->fd);
+    if (chw->fd != -1)
+        close(chw->fd);
+    chw->fd = -1;
 }
 /* Pass a fd from a parent to a child */
 int child_worker_recv(struct child_worker* chw, chwmsg_enum* msg, fd_t* fd)
 {
-    char msg_char[CHWMSG_MAXLEN] = {0};
+    char msg_char[CHWMSG_LENGTH + 1] = {0};
     //-----------------------
     /* Reading without accepting a file descriptor */
-    ssize_t size = sock_fd_read(chw->fd, msg_char, sizeof(msg_char), fd);
+    ssize_t size = sock_fd_read(chw->fd, msg_char, CHWMSG_LENGTH, fd);
+    *msg = CHWMSG_NONE;
     if (size <= 0)
         return -1;
 
@@ -158,10 +162,10 @@ int child_worker_recv(struct child_worker* chw, chwmsg_enum* msg, fd_t* fd)
         *msg = CHWMSG_TASK;
     } else {
         my_errno = HTTP_ERR_FDTRS;
-        fprintf(stderr, "Incorrect command: %s", strmyerror());
+        fprintf(stderr, "Incorrect command: %s\n", strmyerror());
     }
     //-----------------------
-    return size;
+    return (int)size;
 }
 int child_worker_send(struct child_worker* chw, chwmsg_enum msg, fd_t fd)
 {
@@ -181,6 +185,6 @@ int child_worker_send(struct child_worker* chw, chwmsg_enum msg, fd_t fd)
     ssize_t size = sock_fd_write(chw->fd, msg_char, strlen(msg_char), fd);
     close(fd);
     //-----------------------
-    return size;
+    return (int)size;
 }
 //-----------------------------------------
