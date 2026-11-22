@@ -24,6 +24,7 @@ DIST := network-servers-$(VERSION)-linux-$(shell uname -m)
 dist: all
 	mkdir $(DIST)
 	for s in $(SERVERS); do for b in $$($(MAKE) -s -C $$s print-bin); do cp $$s/$$b $(DIST)/; done; done
+	for s in $(SERVERS); do if [ -d $$s/data ]; then cp $$s/data/* $(DIST)/; fi; done
 	tar -czf $(DIST).tar.gz $(DIST)
 	rm -r $(DIST)
 
