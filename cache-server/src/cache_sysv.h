@@ -13,7 +13,7 @@ typedef unsigned short mysem_inx_t;
  * @return Semaphore set id (exits on error).
  */
 mysem_t mysem_create(mysem_inx_t num, mysem_val_t* vals);
-/** @brief Decrement (lock) semaphore @p member, blocking; exits on error. */
+/** @brief Decrement (lock) semaphore @p member, blocking (SEM_UNDO); exits on error. */
 void mysem_lock(mysem_t sid, mysem_inx_t member);
 /** @brief Increment (unlock) semaphore @p member; exits on error. */
 void mysem_unlock(mysem_t sid, mysem_inx_t member);

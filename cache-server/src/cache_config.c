@@ -1,7 +1,7 @@
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,24 +9,15 @@
 #include <unistd.h>
 
 #include "cache_error.h"
+#include "cache_hash.h"
 #include "cache.h"
+
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
 
 //-----------------------------------------
 myerr my_errno = SRV_ERR_NONE;
-//-----------------------------------------
-void signal_handler(int sig)
-{
-    if (sig == SIGINT) {
-        for (wc_t i = 0; i < server_conf.workers; ++i) {
-            kill(server_conf.child_workers[i].pid, SIGTERM);
-        }
-        kill(getpid(), SIGTERM);
-    } else if (sig == SIGCHLD) {
-        int status;
-        if (waitpid(WAIT_ANY, &status, WNOHANG) < 0)
-            perror("waitpid");
-    }
-}
 //-----------------------------------------
 const char* strmyerror(void)
 {
@@ -66,26 +57,42 @@ int set_nonblock(evutil_socket_t fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 //-----------------------------------------
-int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
+/* Parse the whole string as a decimal number in [min, max] */
+static bool parse_number(const char* str, long min, long max, long* value)
 {
+    if (!str || !*str)
+        return false;
+    char* end = NULL;
+    errno = 0;
+    long v = strtol(str, &end, 10);
+    if (errno || *end || v < min || v > max)
+        return false;
+    *value = v;
+    return true;
+}
+int server_config_set(srv_conf* conf, const char* port, const char* ip, const char* work)
+{
+    long value = 0;
     //-----------------------
-    const long max_port = 65535L;
-    long port_value = port ? atol(port) : 0L;
-    if (!port || port_value > max_port) {
-        my_errno = SRV_ERR_INPUT;
-        fprintf(stderr, "%s\n", strmyerror());
-        conf->port = 8080;
-    } else {
-        conf->port = (uint16_t)port_value;
+    if (!parse_number(port, 1L, 65535L, &value)) {
+        fprintf(stderr, "invalid port '%s': expected 1..65535\n", port ? port : "");
+        return -1;
     }
+    conf->port = (uint16_t)value;
     //-----------------------
-    if (ip && strlen(ip) < SRV_IPSTRLENGTH) {
-        strcpy(conf->ip, ip);
-    } else {
-        my_errno = SRV_ERR_INPUT;
-        fprintf(stderr, "%s\n", strmyerror());
-        strcpy(conf->ip, "0.0.0.0");
+    struct in_addr addr;
+    if (!ip || strlen(ip) >= SRV_IPSTRLENGTH || 1 != inet_pton(AF_INET, ip, &addr)) {
+        fprintf(stderr, "invalid ip '%s': expected an IPv4 address\n", ip ? ip : "");
+        return -1;
     }
+    strcpy(conf->ip, ip);
+    //-----------------------
+    if (!parse_number(work, 1L, (long)SRV_MAX_WORKERS, &value)) {
+        fprintf(stderr, "invalid number of workers '%s': expected 1..%u\n", work ? work : "",
+                SRV_MAX_WORKERS);
+        return -1;
+    }
+    conf->workers = (wc_t)value;
     //-----------------------
     conf->ptr_server_name = SRV_SERVER_NAME;
     //-----------------------
@@ -96,26 +103,26 @@ int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
     } else
         conf->server_path[bytes] = '\0';
     //-----------------------
-    if (work) {
-        conf->workers = atoi(work);
-    } else {
-        my_errno = SRV_ERR_INPUT;
-        fprintf(stderr, "%s\n", strmyerror());
-        conf->workers = 4U;
-    }
-    //-----------------------
+    return 0;
+}
+int server_config_init(srv_conf* conf)
+{
     if (!(conf->child_workers = calloc(conf->workers, sizeof(*conf->child_workers)))) {
         perror("child_workers");
         exit(EXIT_FAILURE);
     }
 
+    conf->myself = NULL;
     for (wc_t i = 0U; i < conf->workers; ++i) {
         if (!child_worker_init(&conf->child_workers[i])) {
+            /* The child inherited the master's ends of the earlier workers' socketpairs:
+             * close them, or those workers would not see the master close its end. */
+            for (wc_t j = 0U; j < i; ++j)
+                child_worker_free(&conf->child_workers[j]);
             conf->myself = &conf->child_workers[i];
             conf->workers = (i + 1);
             break;
-        } else
-            (conf->myself = NULL);
+        }
     }
     //-----------------------
     return 0;
@@ -123,53 +130,85 @@ int server_config_init(srv_conf* conf, char* port, char* ip, char* work)
 void server_config_print(srv_conf* conf, FILE* stream)
 {
     fprintf(stream,
-            ">>> http server config:\n\n\tname: '%s'   server path: '%s'\n"
-            "\tport: %u   ip: '%s'\n\n",
-            conf->ptr_server_name, conf->server_path, conf->port, conf->ip);
+            ">>> cache server config:\n\n\tname: '%s'   server path: '%s'\n"
+            "\tport: %u   ip: '%s'   workers: %u\n",
+            conf->ptr_server_name, conf->server_path, conf->port, conf->ip, conf->workers);
+    if (conf->ht)
+        fprintf(stream, "\tshm: %d   sem: %d\n", conf->ht->tb_shmid, conf->ht->tb_semid);
+    fprintf(stream, "\n");
 }
 void server_config_free(srv_conf* conf)
 {
+    if (!conf->child_workers)
+        return;
     //-----------------------
     for (wc_t i = 0U; i < conf->workers; ++i)
         child_worker_free(&conf->child_workers[i]);
+    /* Master: the workers see end of file on their sockets and exit */
+    if (!conf->myself) {
+        for (wc_t i = 0U; i < conf->workers; ++i) {
+            while (0 > waitpid(conf->child_workers[i].pid, NULL, 0) && errno == EINTR) {
+            }
+        }
+    }
     free(conf->child_workers);
     //-----------------------
-    memset(conf, 0, sizeof(*conf));
+    conf->child_workers = NULL;
+    conf->myself = NULL;
+    conf->workers = 0U;
 }
 //-----------------------------------------
+static void print_usage(FILE* stream, const char* name)
+{
+    fprintf(stream,
+            "usage: %s [-p|--port <port>] [-i|--ip <ipv4>] [-w|--workers <1..%u>]\n"
+            "       %s -v|--version | -h|--help\n"
+            "defaults: port %s, ip %s, %s workers\n",
+            name, SRV_MAX_WORKERS, name, SRV_DEFAULT_PORT, SRV_DEFAULT_IP, SRV_DEFAULT_WORKERS);
+}
 int parse_console_parameters(int argc, char** argv, srv_conf* conf)
 {
-    static struct option long_options[] = {{"conf", required_argument, 0, 'c'}, {0, 0, 0, 0}};
+    static const struct option long_options[] = {
+        {"port", required_argument, 0, 'p'},    {"ip", required_argument, 0, 'i'},
+        {"workers", required_argument, 0, 'w'}, {"version", no_argument, 0, 'v'},
+        {"help", no_argument, 0, 'h'},          {0, 0, 0, 0}};
+    const char* name = (argc > 0 && argv[0]) ? argv[0] : "cache-server";
+    const char* port = SRV_DEFAULT_PORT;
+    const char* ip = SRV_DEFAULT_IP;
+    const char* work = SRV_DEFAULT_WORKERS;
     //-----------------------
-    int c, option_index = 0;
-    while (-1 != (c = getopt_long(argc, argv, "c:", long_options, &option_index))) {
+    int c;
+    optind = 0; /* full rescan: the function may be called more than once */
+    while (-1 != (c = getopt_long(argc, argv, "p:i:w:vh", long_options, NULL))) {
         switch (c) {
-        case 0:
-            printf("option %s", long_options[option_index].name);
+        case 'p':
+            port = optarg;
             break;
-
-        case 'c':
-            /* the config file is not supported yet */
+        case 'i':
+            ip = optarg;
             break;
-
-        case '?':
-            /* getopt_long already printed an error message. */
-            printf("using:\n./wwwd -c|--conf <conf>\n\n");
+        case 'w':
+            work = optarg;
             break;
-
+        case 'v':
+            printf("%s\n", NS_VERSION);
+            return PARSE_EXIT;
+        case 'h':
+            print_usage(stdout, name);
+            return PARSE_EXIT;
         default:
-            printf("?? getopt returned character code 0%o ??\n", c);
-            break;
+            /* getopt_long already printed an error message. */
+            print_usage(stderr, name);
+            return PARSE_ERROR;
         }
     }
     //-----------------------
     if (optind < argc) {
-        printf("non-option ARGV-elements: ");
-        while (optind < argc)
-            printf("%s ", argv[optind++]);
-        printf("\n");
+        fprintf(stderr, "unexpected argument '%s'\n", argv[optind]);
+        print_usage(stderr, name);
+        return PARSE_ERROR;
     }
     //-----------------------
-    return server_config_init(conf, NULL, NULL, NULL);
+    return server_config_set(conf, port, ip, work) ? PARSE_ERROR : PARSE_RUN;
 }
 //-----------------------------------------

@@ -3,7 +3,6 @@ BIN     := cache-server
 BUILD   := build$(if $(SAN),-san)
 
 SRCS     := $(wildcard src/*.c)
-MAIN_SRC := src/cache_main.c
 OBJS     := $(SRCS:src/%.c=$(BUILD)/%.o)
 LIB_OBJS := $(filter-out $(BUILD)/cache_main.o,$(OBJS))
 
@@ -31,7 +30,21 @@ $(BUILD)/%.o: src/%.c | $(BUILD)
 $(BUILD):
 	mkdir -p $@
 
-test: all
+TESTS     := test_hash test_handling test_config test_integration
+TEST_BINS := $(TESTS:%=$(BUILD)/%)
+
+$(BUILD)/tests/%.o: tests/%.c | $(BUILD)
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) -Isrc $(CFLAGS) -c $< -o $@
+
+# The integration test runs the server binary built next to it.
+$(BUILD)/tests/test_integration.o: override CPPFLAGS += -DCACHE_SERVER_BIN='"$(abspath $(BUILD)/$(BIN))"'
+
+$(BUILD)/test_%: $(BUILD)/tests/test_%.o $(LIB_OBJS)
+	$(CC) $(LDFLAGS) $^ -o $@ -lcmocka $(LDLIBS)
+
+test: all $(TEST_BINS)
+	@set -e; for t in $(TEST_BINS); do echo "== $$t"; $(RUN) ./$$t; done
 
 clean:
 	rm -rf build build-san
@@ -39,6 +52,9 @@ clean:
 print-bin:
 	@echo $(BUILD)/$(BIN)
 
--include $(OBJS:.o=.d)
+-include $(OBJS:.o=.d) $(TESTS:%=$(BUILD)/tests/%.d)
+
+# keep the test objects between runs
+.SECONDARY:
 
 .PHONY: all test clean print-bin

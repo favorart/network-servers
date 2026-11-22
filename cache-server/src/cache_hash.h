@@ -32,7 +32,7 @@ struct hashtable_line
     ht_rec data;
 };
 //-----------------------------------------
-/** @brief Hash table with open addressing in shared memory, guarded by a semaphore. */
+/** @brief Hash table with linear probing in shared memory, guarded by a semaphore. */
 typedef struct hash_table hashtable;
 struct hash_table
 {
@@ -65,7 +65,8 @@ void hashtable_free(hashtable* ht);
 bool hashtable_get(hashtable* ht, ht_rec* data);
 /**
  * @brief Insert or update the record for data->key.
- * @return false on success, true if there is no room for it.
+ * Expired records are dropped on the way, so their slots are reused.
+ * @return false on success, true if the table is full.
  */
 bool hashtable_set(hashtable* ht, ht_rec* data);
 //-----------------------------------------

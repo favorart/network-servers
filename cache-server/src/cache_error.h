@@ -1,7 +1,5 @@
 #ifndef _CACHE_ERROR_H_
 #define _CACHE_ERROR_H_
-
-#define _DEBUG
 //-----------------------------------------
 /** @brief Server error codes, stored in my_errno. */
 typedef enum
