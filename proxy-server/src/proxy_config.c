@@ -1,9 +1,20 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
 #include "proxy_error.h"
 #include "proxy.h"
 
+myerr my_errno = SRV_ERR_NONE;
 //-----------------------------------------
-const char* strmyerror()
+const char* strmyerror(void)
 {
     const char* strerr;
 
@@ -39,19 +50,16 @@ const char* strmyerror()
 int set_nonblock(evutil_socket_t fd)
 {
     int flags;
-#ifdef O_NONBLOCK
     if (-1 == (flags = fcntl(fd, F_GETFL, 0)))
         flags = 0;
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-#else
-    flags = 1;
-    return ioctl(fd, FIOBIO, &flags);
-#endif
 }
 //-----------------------------------------
 int server_config_init(srv_conf* conf, char* path)
 {
     bool fail = false;
+    FILE* f_conf = NULL;
+    char* fileline = NULL;
     //-----------------------
     srand((unsigned int)clock());
     //-----------------------
@@ -86,22 +94,22 @@ int server_config_init(srv_conf* conf, char* path)
     } else
         conf->server_path[bytes] = '\0';
     //-----------------------
-    FILE* f_conf = fopen(conf->config_path, "rt");
+    f_conf = fopen(conf->config_path, "rt");
     if (!f_conf) {
         fprintf(stderr, "%s\n", strerror(errno));
         fail = true;
         goto CONF_FREE;
     }
 
-    char* fileline = malloc((filesize + 1U) * sizeof(char));
+    fileline = malloc((filesize + 1U) * sizeof(char));
     if (!fileline) {
         fprintf(stderr, "%s\n", strerror(errno));
         fail = true;
         goto CONF_FREE;
     }
 
-    fread(fileline, filesize, 1U, f_conf);
-    fileline[filesize] = '\0';
+    size_t got = fread(fileline, 1U, filesize, f_conf);
+    fileline[got] = '\0';
 
     size_t count = 0;
     char* str = fileline;
@@ -138,13 +146,9 @@ int server_config_init(srv_conf* conf, char* path)
 
             conf->remote_servers_count = i;
             break;
-
-            // fail = true;
-            // goto CONF_FREE;
         }
 
         sprintf(conf->remote_servers[i].ip, "%hu.%hu.%hu.%hu", ip1, ip2, ip3, ip4);
-        // printf ("%s : %hu\n", conf->remote_servers[i].ip, conf->remote_servers[i].port);
         str += str_offset;
     }
 
@@ -170,14 +174,14 @@ void server_config_free(srv_conf* conf)
     memset(conf, 0, sizeof(*conf));
 }
 //-----------------------------------------
-#include <getopt.h> /* for getopt_long finction */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf)
 {
     char* conf_opt = NULL;
-    static struct option long_options[] = {{"conf", required_argument, 0, 'c'}, {0, 0, 0, 0}};
+    static struct option long_options[] = {
+        {"conf", required_argument, 0, 'c'}, {"version", no_argument, 0, 'v'}, {0, 0, 0, 0}};
     //-----------------------
     int c, option_index = 0;
-    while (-1 != (c = getopt_long(argc, argv, "c:", long_options, &option_index))) {
+    while (-1 != (c = getopt_long(argc, argv, "c:v", long_options, &option_index))) {
         switch (c) {
         case 0:
             printf("option %s", long_options[option_index].name);
@@ -186,6 +190,10 @@ int parse_console_parameters(int argc, char** argv, srv_conf* conf)
         case 'c':
             conf_opt = optarg;
             break;
+
+        case 'v':
+            printf("%s\n", NS_VERSION);
+            return SRV_PARSE_VERSION;
 
         case '?':
             /* getopt_long already printed an error message. */

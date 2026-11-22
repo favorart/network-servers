@@ -1,4 +1,12 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
 #include "proxy_error.h"
 #include "proxy.h"
 
@@ -7,6 +15,8 @@ struct server_config server_conf = {0};
 void proxy_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
 {
     struct event_base* base = (struct event_base*)arg;
+    (void)fd;
+    (void)ev;
 
     int err = EVUTIL_SOCKET_ERROR();
     fprintf(stderr,
@@ -20,6 +30,7 @@ void proxy_accept_cb(evutil_socket_t fd, short ev, void* arg)
 {
     /* A new connection! Set up a bufferevent for it */
     struct event_base* base = (struct event_base*)arg;
+    (void)ev;
     //----------------------------------------------------------------------
     int SlaveSocket = accept(fd, 0, 0);
     if (SlaveSocket == -1) {
@@ -125,7 +136,7 @@ void proxy_error_cb(struct bufferevent* b_ev, short events, void* arg)
         evbuffer_remove_buffer(buf_in, buf_out, evbuffer_get_length(buf_in));
 
 #ifdef _DEBUG
-        printf("Got a close. Length = %u\n", evbuffer_get_length(buf_out));
+        printf("Got a close. Length = %zu\n", evbuffer_get_length(buf_out));
 #endif // _DEBUG
 
         int bev_fd = bufferevent_getfd(Client->b_ev);

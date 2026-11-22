@@ -1,4 +1,11 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
 #include "proxy_error.h"
 #include "proxy.h"
 
@@ -6,9 +13,14 @@
 int main(int argc, char** argv)
 {
     int result = 0;
+    int MasterSocket = -1;
+    struct event_base* base = NULL;
 
     /* Read the server configuration from the command line parameters */
-    if (parse_console_parameters(argc, argv, &server_conf)) {
+    int parsed = parse_console_parameters(argc, argv, &server_conf);
+    if (parsed == SRV_PARSE_VERSION)
+        return 0;
+    if (parsed) {
         fprintf(stderr, "%s\n", strerror(errno));
         result = 1;
         goto MARK_FREE;
@@ -16,7 +28,7 @@ int main(int argc, char** argv)
     server_config_print(&server_conf, stdout);
 
     /* Create the listening socket */
-    int MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (MasterSocket == -1) {
         fprintf(stderr, "%s\n", strerror(errno));
         result = 1;
@@ -57,7 +69,7 @@ int main(int argc, char** argv)
      */
 
     /* Initialize new event_base to do not overlay the global context */
-    struct event_base* base = event_base_new();
+    base = event_base_new();
     if (!base) {
         fprintf(stderr, "%s\n", strerror(errno));
         result = 1;
@@ -79,10 +91,13 @@ int main(int argc, char** argv)
 
 MARK_FREE:
     //-------------------------------------------
-    event_base_free(base);
+    if (base)
+        event_base_free(base);
 
-    shutdown(MasterSocket, SHUT_RDWR);
-    close(MasterSocket);
+    if (MasterSocket != -1) {
+        shutdown(MasterSocket, SHUT_RDWR);
+        close(MasterSocket);
+    }
 
     server_config_free(&server_conf);
     //-------------------------------------------

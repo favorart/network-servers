@@ -1,9 +1,5 @@
-#include "stdafx.h"
-
 #ifndef _PROXY_ERROR_H_
 #define _PROXY_ERROR_H_
-
-#define _DEBUG
 //-----------------------------------------
 /** @brief Proxy-specific error codes, stored in my_errno. */
 typedef enum
@@ -16,7 +12,8 @@ typedef enum
     SRV_ERR_RFREE,
     SRV_ERR_FCONF
 } myerr;
-myerr my_errno;
+/** @brief Last proxy-specific error (defined in proxy_config.c). */
+extern myerr my_errno;
 //-----------------------------------------
 /**
  * @brief Describe the current my_errno and reset it to SRV_ERR_NONE.

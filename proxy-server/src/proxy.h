@@ -1,13 +1,16 @@
-#include "stdafx.h"
-
 #ifndef _PROXY_H_
 #define _PROXY_H_
+
+#include <stdint.h>
+#include <stdio.h>
+
+#include <event.h>
 /*
  *  Create a proxy server.
  *  ! LINUX ARCHITECTURE !
  *
  *  v   Build with make.
- *  +   Run:  ./proxy -c/--conf <filename>
+ *  +   Run:  ./proxy-server -c/--conf <filename>, -v/--version
  *            Config: <proxy_port>,<ip1:port1>, <ip2:port2>, ...
  *  +   The server for the outgoing connection is chosen at random
  *      from the list of servers in the config file.
@@ -18,6 +21,10 @@
  *      On connection close or error - drop both connections
  */
 //-----------------------------------------
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
+
 #define SRV_SERVER_NAME "proxy-server-pract3"
 #define SRV_CONFDEFNAME "config.txt"
 #define SRV_CONFMAXSERV 25U
@@ -60,9 +67,11 @@ void server_config_print(srv_conf* conf, FILE* stream);
 /** @brief Free the remote server list and zero the config. */
 void server_config_free(srv_conf* conf);
 //-----------------------------------------
+/** @brief parse_console_parameters() result: -v/--version was printed, exit with 0. */
+#define SRV_PARSE_VERSION 2
 /**
- * @brief Parse the -c/--conf option and initialize @p conf.
- * @return Result of server_config_init().
+ * @brief Parse the -c/--conf and -v/--version options and initialize @p conf.
+ * @return Result of server_config_init(), or SRV_PARSE_VERSION after printing NS_VERSION.
  */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf);
 //-----------------------------------------
