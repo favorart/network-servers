@@ -46,14 +46,21 @@ jobs:
     - name: version
       if: env.RELEASE == 'true'
       run: echo "VERSION=$(bash .github/next-tag.sh | sed 's/^v//')" >> "$GITHUB_ENV"
-    - name: install libevent
+    - name: install libevent, cmocka, GoogleTest
       # the runner's package index is usually fresh enough; update only if it is not
       run: |
-        PKGS="libevent-dev"
+        PKGS="libevent-dev libcmocka-dev libgtest-dev"
         sudo apt-get install -y --no-install-recommends $PKGS ||
           { sudo apt-get update && sudo apt-get install -y --no-install-recommends $PKGS; }
-    - name: build
+    - name: build (-Wall -Wextra -Wpedantic -Werror)
       run: make -j all
+    - name: tests
+      run: make test
+    - name: tests under ASan + UBSan
+      # ASan of older clang crashes at startup with high ASLR entropy (kernel 6.x)
+      run: |
+        sudo sysctl -w vm.mmap_rnd_bits=28
+        make test SAN=1
     - name: pack
       if: env.RELEASE == 'true' && matrix.cc == 'gcc'
       run: make dist

@@ -5,12 +5,6 @@
 *.d
 build/
 network-servers-*
-cache-server/cache-server
-chat-server/chat-server
-chat-server/chat-client
-dictionary-server/dictionary-server
-http-server/http-server
-proxy-server/proxy-server
-subscribe-server/subscribe-server
+build-san/
 # local secrets
 .env
