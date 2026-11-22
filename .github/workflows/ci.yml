@@ -82,6 +82,36 @@ jobs:
     - name: check
       run: make format-check
 
+  # Throughput and latency of every server (bench/ns-bench.c). Numbers only, no thresholds:
+  # shared runners are noisy, so the tag does not wait for this job.
+  bench:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v7
+    - name: install libevent
+      run: |
+        sudo apt-get install -y --no-install-recommends libevent-dev ||
+          { sudo apt-get update && sudo apt-get install -y --no-install-recommends libevent-dev; }
+    - name: build
+      run: make -j all
+    - name: benchmark
+      run: make bench BENCH_OUT=bench-results.md
+    - name: summary
+      if: always()
+      run: |
+        if [ -f bench-results.md ]; then
+          { echo "## Benchmark"; echo; cat bench-results.md; } >> "$GITHUB_STEP_SUMMARY"
+        fi
+    - uses: actions/upload-artifact@v7
+      if: always()
+      with:
+        name: bench-results
+        path: bench-results.md
+        if-no-files-found: warn
+        retention-days: 30
+
   # Tag the main commit with the next patch version: v0.0.1, v0.0.2, ...
   # A minor or major bump is a tag pushed by hand; the numbering continues from it.
   tag:
