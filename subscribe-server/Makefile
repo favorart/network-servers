@@ -3,7 +3,7 @@ BIN      := subscribe-server
 SRCS     := $(wildcard *.cpp)
 
 CXXFLAGS ?= -O2 -g
-CXXFLAGS += -std=c++11
+override CXXFLAGS += -std=c++11
 LDLIBS   += -levent -lpthread
 
 $(BIN): $(SRCS) $(wildcard *.h)

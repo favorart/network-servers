@@ -3,7 +3,7 @@ BIN      := cache-server
 SRCS     := $(wildcard *.c)
 
 CFLAGS   ?= -O2 -g
-CFLAGS   += -std=gnu11 -fcommon -fgnu89-inline
+override CFLAGS += -std=gnu11 -fcommon -fgnu89-inline
 LDLIBS   += -levent -lpthread
 
 $(BIN): $(SRCS) $(wildcard *.h)

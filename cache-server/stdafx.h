@@ -1,7 +1,7 @@
 ﻿#ifndef _STDAFX_H_
 #define _STDAFX_H_
 
-#define _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #define  WAIT_ANY (-1)
 //-----------------------------------------
 #include <sys/types.h>
@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-// #include <arpa/inet.h>
+#include <arpa/inet.h>
 
 #include <unistd.h>
 #include <limits.h>
