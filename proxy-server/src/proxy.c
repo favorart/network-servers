@@ -12,6 +12,13 @@
 
 struct server_config server_conf = {0};
 //-----------------------------------------
+int proxy_choose_server(const srv_conf* conf)
+{
+    if (!conf->remote_servers_count)
+        return -1;
+    return rand() % conf->remote_servers_count;
+}
+//-----------------------------------------
 void proxy_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
 {
     struct event_base* base = (struct event_base*)arg;
@@ -48,6 +55,7 @@ void proxy_accept_cb(evutil_socket_t fd, short ev, void* arg)
     struct client* Client = (struct client*)calloc(1U, sizeof(*Client));
     if (!Client) {
         fprintf(stderr, "%s\n", strerror(errno));
+        close(SlaveSocket);
         return;
     }
 
@@ -55,7 +63,13 @@ void proxy_accept_cb(evutil_socket_t fd, short ev, void* arg)
     Client->base = base;
     //----------------------------------------------------------------------
     /* Random server choosing */
-    int srv_id = (rand() % server_conf.remote_servers_count);
+    int srv_id = proxy_choose_server(&server_conf);
+    if (srv_id < 0) {
+        fprintf(stderr, "No remote servers configured\n");
+        free(Client);
+        close(SlaveSocket);
+        return;
+    }
     //----------------------------------------------------------------------
     struct sockaddr_in SockAddr = {0};
     SockAddr.sin_family = AF_INET;
@@ -79,6 +93,7 @@ void proxy_accept_cb(evutil_socket_t fd, short ev, void* arg)
         /* The connection attempt failed */
         bufferevent_free(Client->server);
         free(Client);
+        close(SlaveSocket);
 
         return;
     }
@@ -104,6 +119,36 @@ void proxy_accept_cb(evutil_socket_t fd, short ev, void* arg)
     // bufferevent_setwatermark (Client->server, EV_WRITE, SRV_BUF_LOWMARK, 0);
 }
 //-----------------------------------------
+/** @brief The other side of the pair. */
+static struct bufferevent* proxy_peer(struct client* Client, struct bufferevent* b_ev)
+{
+    return (Client->b_ev == b_ev) ? Client->server : Client->b_ev;
+}
+/** @brief Free the pair after both sides sent EOF and both outputs are flushed. */
+static void proxy_try_close(struct client* Client)
+{
+    if (Client->flag_close < 2 || evbuffer_get_length(bufferevent_get_output(Client->b_ev)) ||
+        evbuffer_get_length(bufferevent_get_output(Client->server)))
+        return;
+
+    bufferevent_free(Client->server);
+    bufferevent_free(Client->b_ev);
+
+#ifdef _DEBUG
+    printf("connection closed\n");
+#endif // _DEBUG
+
+    free(Client);
+}
+/** @brief The peer sent EOF and @p b_ev output is flushed: pass the EOF on. */
+static void proxy_drained_cb(struct bufferevent* b_ev, void* arg)
+{
+    struct client* Client = (struct client*)arg;
+
+    bufferevent_setcb(b_ev, proxy_read_cb, NULL, proxy_error_cb, Client);
+    shutdown(bufferevent_getfd(b_ev), SHUT_WR);
+    proxy_try_close(Client);
+}
 void proxy_error_cb(struct bufferevent* b_ev, short events, void* arg)
 {
     /*   An event structure becomes a timeout trigger with the timeout_set() function.
@@ -128,9 +173,10 @@ void proxy_error_cb(struct bufferevent* b_ev, short events, void* arg)
     } else if (events & BEV_EVENT_EOF) {
         struct client* Client = (struct client*)arg;
 
+        struct bufferevent* peer = proxy_peer(Client, b_ev);
+
         struct evbuffer* buf_in = bufferevent_get_input(b_ev);
-        struct evbuffer* buf_out =
-            bufferevent_get_output((Client->b_ev == b_ev) ? Client->server : Client->b_ev);
+        struct evbuffer* buf_out = bufferevent_get_output(peer);
 
         /* Copy all the data from the input buffer to the output buffer */
         evbuffer_remove_buffer(buf_in, buf_out, evbuffer_get_length(buf_in));
@@ -139,19 +185,13 @@ void proxy_error_cb(struct bufferevent* b_ev, short events, void* arg)
         printf("Got a close. Length = %zu\n", evbuffer_get_length(buf_out));
 #endif // _DEBUG
 
-        int bev_fd = bufferevent_getfd(Client->b_ev);
-        shutdown(bev_fd, SHUT_WR);
-
         ++Client->flag_close;
-        if (Client->flag_close > 1) {
-            bufferevent_free(Client->server);
-            bufferevent_free(Client->b_ev);
-
-#ifdef _DEBUG
-            printf("connection closed\n");
-#endif // _DEBUG
-
-            free(Client);
+        /* Half-close the peer once everything queued for it is written */
+        if (evbuffer_get_length(buf_out))
+            bufferevent_setcb(peer, proxy_read_cb, proxy_drained_cb, proxy_error_cb, Client);
+        else {
+            shutdown(bufferevent_getfd(peer), SHUT_WR);
+            proxy_try_close(Client);
         }
     } else if (events & BEV_EVENT_ERROR) // (BEV_EVENT_EOF | BEV_EVENT_ERROR)
     {
@@ -181,8 +221,7 @@ void proxy_read_cb(struct bufferevent* b_ev, void* arg)
     struct client* Client = (struct client*)arg;
 
     struct evbuffer* buf_in = bufferevent_get_input(b_ev);
-    struct evbuffer* buf_out =
-        bufferevent_get_output((Client->b_ev == b_ev) ? Client->server : Client->b_ev);
+    struct evbuffer* buf_out = bufferevent_get_output(proxy_peer(Client, b_ev));
 
     /* Copy all the data from the input buffer to the output buffer. */
     evbuffer_remove_buffer(buf_in, buf_out, evbuffer_get_length(buf_in));
