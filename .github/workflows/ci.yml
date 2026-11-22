@@ -65,11 +65,21 @@ jobs:
         if-no-files-found: error
         retention-days: 1
 
+  format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v7
+    - name: clang-format 18.1.8
+      run: pipx install clang-format==18.1.8
+    - name: check
+      run: make format-check
+
   # Tag the main commit with the next patch version: v0.0.1, v0.0.2, ...
   # A minor or major bump is a tag pushed by hand; the numbering continues from it.
   tag:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [ linux ]
+    needs: [ linux, format ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
