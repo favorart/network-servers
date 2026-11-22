@@ -1,12 +1,18 @@
-#include "stdafx.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <unistd.h>
+
 #include "http_error.h"
 #include "http_server.h"
 
-const char* const chwmsg_task = "task";
-const char* const chwmsg_term = "term";
+static const char* const chwmsg_task = "task";
+static const char* const chwmsg_term = "term";
 //-----------------------------------------
 /* The function writes some data and an optional file descriptor */
-size_t sock_fd_write(int sock, void* buf, size_t buf_len, int fd)
+static ssize_t sock_fd_write(int sock, const void* buf, size_t buf_len, int fd)
 {
     struct cmsghdr* cmsg;
     struct msghdr msg;
@@ -17,7 +23,7 @@ size_t sock_fd_write(int sock, void* buf, size_t buf_len, int fd)
     } cmsgu;
     //-----------------------
 
-    iov.iov_base = buf;
+    iov.iov_base = (void*)buf;
     iov.iov_len = buf_len;
 
     msg.msg_name = NULL;
@@ -28,7 +34,7 @@ size_t sock_fd_write(int sock, void* buf, size_t buf_len, int fd)
     //-----------------------
     if (fd == -1) {
         perror("fd not passed");
-        return 0U;
+        return 0;
     }
 
     msg.msg_control = cmsgu.control;
@@ -42,7 +48,7 @@ size_t sock_fd_write(int sock, void* buf, size_t buf_len, int fd)
     *((int*)CMSG_DATA(cmsg)) = fd;
 
     //-----------------------
-    size_t size;
+    ssize_t size;
     if (0 > (size = sendmsg(sock, &msg, 0))) {
         perror("sendmsg");
     }
@@ -50,9 +56,9 @@ size_t sock_fd_write(int sock, void* buf, size_t buf_len, int fd)
     return size;
 }
 /* And here's the matching receiver function */
-size_t sock_fd_read(int sock, void* buf, size_t buf_len, int* fd)
+static ssize_t sock_fd_read(int sock, void* buf, size_t buf_len, int* fd)
 {
-    size_t size;
+    ssize_t size;
     //-----------------------
     if (fd) {
         struct cmsghdr* cmsg;
@@ -142,7 +148,7 @@ int child_worker_recv(struct child_worker* chw, chwmsg_enum* msg, fd_t* fd)
     char msg_char[CHWMSG_MAXLEN] = {0};
     //-----------------------
     /* Reading without accepting a file descriptor */
-    size_t size = sock_fd_read(chw->fd, msg_char, sizeof(msg_char), fd);
+    ssize_t size = sock_fd_read(chw->fd, msg_char, sizeof(msg_char), fd);
     if (size <= 0)
         return -1;
 
@@ -172,7 +178,7 @@ int child_worker_send(struct child_worker* chw, chwmsg_enum msg, fd_t fd)
         break;
     }
     //-----------------------
-    size_t size = sock_fd_write(chw->fd, msg_char, strlen(msg_char), fd);
+    ssize_t size = sock_fd_write(chw->fd, msg_char, strlen(msg_char), fd);
     close(fd);
     //-----------------------
     return size;

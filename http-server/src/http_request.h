@@ -1,7 +1,10 @@
-#include "stdafx.h"
 
 #ifndef _HTTP_REQ_H_
 #define _HTTP_REQ_H_
+#include <stdbool.h>
+#include <stdio.h>
+
+struct evbuffer;
 //-----------------------------------------
 /*  CMND URI HTTP/1.0\r\n
  *  Header1: something\r\n
@@ -28,7 +31,6 @@ typedef enum
     HTTP_EXT_JPEG
 } file_ext;
 
-// #define HTTP_VERSION_LENGTH  5
 typedef struct http_request http_req;
 /** @brief A parsed HTTP request: method, local file path and file info. */
 struct http_request
@@ -39,12 +41,10 @@ struct http_request
     struct evbuffer* content; // v
     file_ext content_type;    // v
     //------------------
-    // char           http_version[HTTP_VERSION_LENGTH];
     bool file_exist; // v
                      //------------------
 };
 
-#define HTTP_REQUEST_GET_SIMPLE "GET /data/test.html HTTP/1.0\r\n\r\n"
 #define HTTP_RESPONSE_200 "HTTP/1.0 200 OK"
 #define HTTP_RESPONSE_404 "HTTP/1.0 404 Not Found"
 //-----------------------------------------

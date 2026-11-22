@@ -1,4 +1,14 @@
-#include "stdafx.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <syslog.h>
+#include <unistd.h>
+
+#include <event.h>
+
 #include "http_error.h"
 #include "http_server.h"
 
@@ -6,6 +16,8 @@
 int main(int argc, char** argv)
 {
     int result = 0;
+    int MasterSocket = -1;
+    struct event_base* base = NULL;
 
 #ifdef HTTP_SYSLOG
     // setlogmask (LOG_UPTO (LOG_NOTICE));
@@ -19,7 +31,6 @@ int main(int argc, char** argv)
         goto MARK_FREE;
     }
 
-    int MasterSocket = -1;
     /* Master Process */
     if (!server_conf.myself) {
         http_server_config_print(&server_conf, stdout);
@@ -67,7 +78,7 @@ int main(int argc, char** argv)
      */
 
     /* Initialize new event_base to do not overlay the global context */
-    struct event_base* base = event_base_new();
+    base = event_base_new();
     if (!base) {
         fprintf(stderr, "%s\n", strerror(errno));
         result = 1;
@@ -94,32 +105,17 @@ int main(int argc, char** argv)
     }
     /* Dispatch events */
     event_base_loop(base, 0);
-
-    // struct evconnlistener  *listener = evconnlistener_new_bind (base, accept_conn_cb, NULL,
-    //                                                             LEV_OPT_CLOSE_ON_FREE |
-    //                                                             LEV_OPT_REUSEABLE, -1, (struct
-    //                                                             sockaddr*)&sin, sizeof (sin));
-    // if ( !listener )
-    // { fprintf (stderr, "%s\n", strerror (errno));
-    //   result = 1;
-    //   goto MARK_FREE;
-    // }
-    // evconnlistener_set_error_cb (listener, accept_error_cb);
-
-    // event_init ();
-    // struct event ev_accept;
-    // event_set (&ev_accept, MasterSocket, EV_READ | EV_PERSIST, on_accept, NULL);
-    // event_add (&ev_accept, NULL);
-    // /* Message loop without parameters */
-    // event_dispatch ();
     //-------------------------------------------
 
 MARK_FREE:
     //-------------------------------------------
-    event_base_free(base);
+    if (base)
+        event_base_free(base);
 
-    shutdown(MasterSocket, SHUT_RDWR);
-    close(MasterSocket);
+    if (MasterSocket != -1) {
+        shutdown(MasterSocket, SHUT_RDWR);
+        close(MasterSocket);
+    }
 
     http_server_config_free(&server_conf);
 

@@ -1,41 +1,18 @@
-#include "stdafx.h"
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <event2/buffer.h>
+
 #include "http_error.h"
 #include "http_server.h"
 #include "http_request.h"
 
-//-----------------------------------------
-const char* strmyerror()
-{
-    const char* strerr;
-
-    switch (my_errno) {
-    default:
-        strerr = NULL;
-        break;
-
-    case HTTP_ERR_PARAM:
-        strerr = "Invalid function argument.";
-        break;
-    case HTTP_ERR_INPUT:
-        strerr = "Input incorrect user data.";
-        break;
-    case HTTP_ERR_LIBEV:
-        strerr = "Incorrect libevent entity.";
-        break;
-    case HTTP_ERR_RCMMN:
-        strerr = "Incorrect request command.";
-        break;
-    case HTTP_ERR_RFREE:
-        strerr = "Dispatched a free request.";
-        break;
-    case HTTP_ERR_FDTRS:
-        strerr = "Failure in transmiting fd.";
-        break;
-    }
-
-    my_errno = HTTP_ERR_NONE;
-    return strerr;
-}
 //-----------------------------------------
 bool http_request_init(struct http_request* req)
 {
@@ -62,7 +39,7 @@ void http_request_clear(struct http_request* req)
 bool http_request_parse(struct http_request* req, struct evbuffer* in_buf)
 {
     const char* HTTP_HEAD_TERM = "\r\n\r\n";
-    const size_t HTTP_HEAD_TERM_LENGTH = sizeof(HTTP_HEAD_TERM);
+    const size_t HTTP_HEAD_TERM_LENGTH = strlen(HTTP_HEAD_TERM);
     //-----------------------------------------------------------------
     size_t buffer_size = evbuffer_get_length(in_buf);
     if (!buffer_size) {
@@ -82,7 +59,6 @@ bool http_request_parse(struct http_request* req, struct evbuffer* in_buf)
         evbuffer_drain(in_buf, HTTP_HEAD_TERM_LENGTH);
         return 0;
     }
-    // evbuffer_ptr_set (buffer, &head_closer, HTTP_HEAD_CLOSER_LENGTH, EVBUFFER_PTR_ADD);
 
     struct evbuffer* header = evbuffer_new();
     evbuffer_remove_buffer(in_buf, header, head_closer.pos);
@@ -92,9 +68,6 @@ bool http_request_parse(struct http_request* req, struct evbuffer* in_buf)
     bool fail = http_reqhead_parse(req, header);
     evbuffer_free(header);
 
-    // if ( req->content ) evbuffer_free (req->content);
-    // req->content = buffer;
-    // evbuffer_remove_buffer (in_buf, req->content, buffer_size);
     //-----------------------------------------------------------------
     return fail;
 }
@@ -103,7 +76,7 @@ bool http_reqhead_parse(struct http_request* req, struct evbuffer* in_buf)
     bool fail = false;
     //-----------------------------------------------------------------
 #ifdef _DEBUG
-    int index = 0;
+    size_t index = 0;
 #endif // _DEBUG
 
     const char* http_command_strs[] = {"HEAD", "GET", "POST"};
@@ -111,10 +84,10 @@ bool http_reqhead_parse(struct http_request* req, struct evbuffer* in_buf)
     const size_t http_command_length = sizeof(http_command_enum) / sizeof(*http_command_enum);
 
     const char* http_version = "HTTP/1.1";
-    const size_t http_version_length = sizeof(http_version) / sizeof(*http_version);
+    const size_t http_version_length = strlen(http_version);
     //-----------------------------------------------------------------
     struct evbuffer_ptr req_type, req_version;
-    for (int i = 0; i < http_command_length; ++i) {
+    for (size_t i = 0; i < http_command_length; ++i) {
         req_type =
             evbuffer_search(in_buf, http_command_strs[i], strlen(http_command_strs[i]), NULL);
         if (req_type.pos != -1) {
@@ -133,7 +106,6 @@ bool http_reqhead_parse(struct http_request* req, struct evbuffer* in_buf)
         goto REQ_FREE;
     }
 
-    // evbuffer_readln (in_buf)
     req_version = evbuffer_search(in_buf, http_version, http_version_length, NULL);
     if (req_version.pos == -1) {
         my_errno = HTTP_ERR_RCMMN;
@@ -249,7 +221,6 @@ bool http_response_make(struct http_request* req, struct evbuffer* out_buf)
         int fd = open(req->uri, O_RDONLY);
         if (fd < 0) {
             fprintf(stderr, "%s\n", strerror(errno));
-            // error (1, errno, "open");
             return 1;
         }
 
@@ -263,7 +234,7 @@ bool http_response_make(struct http_request* req, struct evbuffer* out_buf)
                             "Server: %s\r\n"
                             "Time: %s\r\n"
                             "Content-Type: %s\r\n"
-                            "Content-Length: %u\r\n"
+                            "Content-Length: %zu\r\n"
                             "Connection: %s\r\n"
                             "\r\n",
                             HTTP_RESPONSE_200, server_conf.ptr_server_name, response_time,
@@ -275,19 +246,17 @@ bool http_response_make(struct http_request* req, struct evbuffer* out_buf)
              * is flushed from the evbuffer, or when the evbuffer
              * is freed.
              */
-            // close (fd);
         } else {
             close(fd);
         }
         //----------------------------------------------------------------
-        // assert (!evbuffer_add_file (out_buf, fd, 0, stat_.st_size));
 
 #ifdef _DEBUG
         printf("\nRESPONSE: %s\n"
                "Server: %s\n"
                "Time: %s\n"
                "Content-Type: %s\n"
-               "Content-Length: %u\n",
+               "Content-Length: %zu\n",
                HTTP_RESPONSE_200, server_conf.ptr_server_name, response_time, content_type,
                content_len);
 #endif // _DEBUG

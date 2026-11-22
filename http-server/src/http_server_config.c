@@ -1,6 +1,18 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "http_error.h"
 #include "http_server.h"
+
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
 
 //-----------------------------------------
 int set_nonblock(evutil_socket_t fd)
@@ -64,7 +76,6 @@ int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, ch
     }
     //-----------------------
     /* exec working directory */
-    // getcwd (conf->server_path, sizeof (conf->server_path))
 
     int bytes = 0U;
     if (0 >= (bytes = readlink("/proc/self/exe", conf->server_path, FILENAME_MAX - 1U))) {
@@ -91,45 +102,17 @@ void http_server_config_free(srv_conf* conf)
     memset(conf, 0, sizeof(*conf));
 }
 //-----------------------------------------
-#include <getopt.h> /* for getopt_long finction */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf)
 {
     char *dir_opt = NULL, *port_opt = NULL, *ip_opt = NULL, *work_opt = NULL;
-    static struct option long_options[] = {{"dir", required_argument, 0, 'd'},
-                                           {"ip", required_argument, 0, 'h'},
-                                           {"port", required_argument, 0, 'p'},
-                                           {"workers", required_argument, 0, 'w'},
-                                           {0, 0, 0, 0}};
+    static struct option long_options[] = {
+        {"dir", required_argument, 0, 'd'},  {"ip", required_argument, 0, 'h'},
+        {"port", required_argument, 0, 'p'}, {"workers", required_argument, 0, 'w'},
+        {"version", no_argument, 0, 'v'},    {0, 0, 0, 0}};
     //-----------------------
-    int c, option_index = 0;
-    while (-1 != (c = getopt_long(argc, argv, "d:h:p:", long_options, &option_index))) {
+    int c;
+    while (-1 != (c = getopt_long(argc, argv, "d:h:p:w:v", long_options, NULL))) {
         switch (c) {
-        case 0:
-            printf("option %s", long_options[option_index].name);
-            if (optarg)
-                printf(" with arg %s", optarg);
-            printf("\n");
-            //-----------------------
-            switch (option_index) {
-            case 0:
-                dir_opt = optarg;
-                break;
-            case 1:
-                ip_opt = optarg;
-                break;
-            case 2:
-                port_opt = optarg;
-                break;
-            case 3:
-                work_opt = optarg;
-                break;
-            case 4:
-                printf("using:\n./wwwd -d|--dir <dir> -h|--ip <ip> -p|--port <port> -w|--workers "
-                       "<num>\n\n");
-                break;
-            }
-            break;
-
         case 'd':
             dir_opt = optarg;
             break;
@@ -142,11 +125,14 @@ int parse_console_parameters(int argc, char** argv, srv_conf* conf)
         case 'w':
             work_opt = optarg;
             break;
+        case 'v':
+            printf("%s %s\n", HTTP_SERVER_NAME, NS_VERSION);
+            exit(EXIT_SUCCESS);
 
         case '?':
             /* getopt_long already printed an error message. */
-            printf("using:\n./wwwd -d|--dir <dir> -h|--ip <ip> -p|--port <port> -w|--workers "
-                   "<num>\n\n");
+            printf("using:\n./http-server -d|--dir <dir> -h|--ip <ip> -p|--port <port> "
+                   "-w|--workers <num> | -v|--version\n\n");
             break;
 
         default:

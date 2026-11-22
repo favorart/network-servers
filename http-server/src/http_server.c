@@ -1,4 +1,14 @@
-#include "stdafx.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <syslog.h>
+
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
+#include <event2/event.h>
+
 #include "http_error.h"
 #include "http_server.h"
 #include "http_request.h"
@@ -19,26 +29,10 @@ struct http_server_config server_conf = {0};
  */
 
 //-----------------------------------------
-/* Connecting handling */
-void http_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
-{
-    struct event_base* base = (struct event_base*)arg;
-
-    int err = EVUTIL_SOCKET_ERROR();
-    fprintf(stderr,
-            "Got an error %d (%s) on the listener. "
-            "Shutting down.\n",
-            err, evutil_socket_error_to_string(err));
-
-#ifdef HTTP_SYSLOG
-    syslog(LOG_ERR, "Got an error %d (%s) on the listener.\nShutting down.\n", err,
-           evutil_socket_error_to_string(err));
-#endif
-
-    event_base_loopexit(base, NULL);
-}
 void http_accept_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)ev;
+    (void)arg;
     //----------------------------------------------------------------------
     int SlaveSocket = accept(fd, 0, 0);
     if (SlaveSocket == -1) {
@@ -58,6 +52,8 @@ void http_accept_cb(evutil_socket_t fd, short ev, void* arg)
 //-----------------------------------------
 void http_connect_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)fd;
+    (void)ev;
     struct event_base* base = (struct event_base*)arg;
     //----------------------------------------------------------------------
     /* Making the new client */
@@ -101,11 +97,11 @@ void http_error_cb(struct bufferevent* b_ev, short events, void* arg)
 
     if (events & BEV_EVENT_EOF) {
 #ifdef _DEBUG
-        printf("Got a close. Len = %u\n", evbuffer_get_length(bufferevent_get_output(b_ev)));
+        printf("Got a close. Len = %zu\n", evbuffer_get_length(bufferevent_get_output(b_ev)));
 #endif
         shutdown(bufferevent_getfd(Client->b_ev), SHUT_RDWR);
 #ifdef HTTP_SYSLOG
-        syslog(LOG_INFO, "Got a close. Len = %u\n",
+        syslog(LOG_INFO, "Got a close. Len = %zu\n",
                evbuffer_get_length(bufferevent_get_output(b_ev)));
 #endif
     }

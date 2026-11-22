@@ -1,5 +1,3 @@
-#include "stdafx.h"
-
 #ifndef _HTTP_ERR_H_
 #define _HTTP_ERR_H_
 
@@ -17,7 +15,8 @@ typedef enum
     HTTP_ERR_RFREE,
     HTTP_ERR_FDTRS
 } myerr;
-myerr my_errno;
+/** @brief Last server-specific error (defined in http_error.c). */
+extern myerr my_errno;
 //-----------------------------------------
 /**
  * @brief Describe the current my_errno and reset it to HTTP_ERR_NONE.

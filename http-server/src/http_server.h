@@ -1,12 +1,19 @@
-#include "stdafx.h"
-#include "http_request.h"
-
 #ifndef _HTTP_SERVER_H_
 #define _HTTP_SERVER_H_
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/types.h>
+
+#include <event2/util.h>
+
+#include "http_request.h"
+
+struct bufferevent;
+struct event_base;
 /*
  *  v   Create an HTTP server.
  *  v   Build with make.
- *  v   Run:  ./wwwd -d/--dir <dir> -h/--ip <ip> -p/--port <port> -w/--workers <num>
+ *  v   Run:  ./http-server -d/--dir <dir> -h/--ip <ip> -p/--port <port> -w/--workers <num>
  *  v   Implement HEAD/GET/POST
  *  v   Statuses 200 and 404
  *  v   The <dir> directory holds html and jpeg files
@@ -115,8 +122,6 @@ struct client
 //-----------------------------------------
 /** @brief Master: accept a connection and pass its socket to a random worker. */
 void http_accept_cb(evutil_socket_t fd, short ev, void* arg);
-/** @brief Listener error: log it and stop the event loop (@p arg is the event_base). */
-void http_ac_err_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
 /** @brief Worker: receive a client socket from the master and set up its bufferevent. */
 void http_connect_cb(evutil_socket_t fd, short ev, void* arg);
