@@ -2,7 +2,7 @@
 #ifndef _HEADER_H_
 #define _HEADER_H_
 
-#define _XOPEN_SOURCE 1
+#define _XOPEN_SOURCE 700
 //-----------------------------------------
 #include <sys/types.h>
 
@@ -13,6 +13,7 @@
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include <unistd.h>
 #include <limits.h>

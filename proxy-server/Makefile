@@ -3,7 +3,7 @@ BIN      := proxy-server
 SRCS     := $(wildcard *.c)
 
 CFLAGS   ?= -O2 -g
-CFLAGS   += -std=gnu11 -fcommon
+override CFLAGS += -std=gnu11 -fcommon
 LDLIBS   += -levent -lpthread
 
 $(BIN): $(SRCS) $(wildcard *.h)
