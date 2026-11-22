@@ -1,12 +1,15 @@
-#include "header.h"
-#include "srv.h"
-
 #ifndef _CACHE_HASH_H_
 #define _CACHE_HASH_H_
+
+#include <pthread.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <time.h>
+
+#include "srv.h"
 //-----------------------------------------
 typedef uint16_t hash_t;
-// typedef   int32_t ht_key_t;
-// typedef   int32_t ht_val_t;
 
 typedef struct hashtable_record ht_rec;
 /** @brief Cache record: key, value and absolute expiry time. */
@@ -25,7 +28,6 @@ struct hashtable_line
     ht_rec data;
 };
 //-----------------------------------------
-typedef struct hash_table hashtable;
 /** @brief Hash table with open addressing; the mutex is used only with _LOCK. */
 struct hash_table
 {
@@ -62,10 +64,5 @@ bool hashtable_get(hashtable* ht, ht_rec* data);
  * @return false on success, true if there is no room for it.
  */
 bool hashtable_set(hashtable* ht, ht_rec* data);
-//-----------------------------------------
-#ifdef _DEBUG_HASH
-/** @brief Print all slots to @p f (only with _DEBUG_HASH). */
-void hashtable_print_debug(hashtable* ht, FILE* f);
-#endif // _DEBUG_HASH
 //-----------------------------------------
 #endif // _CACHE_HASH_H_

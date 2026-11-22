@@ -1,8 +1,16 @@
-#include "header.h"
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+
+#include <event2/buffer.h>
+#include <event2/bufferevent.h>
+#include <event2/event.h>
+
 #include "srv.h"
 #include "srv_cache.h"
 
-void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struct hash_table* ht);
 //-----------------------------------------
 void server_job_function(job_t* job)
 {
@@ -22,6 +30,8 @@ void client_free(struct client* Client)
 //-----------------------------------------
 void srv_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)fd;
+    (void)ev;
     struct server_config* server_conf = (struct server_config*)arg;
     //----------------------------------------------------------------------
     int err = EVUTIL_SOCKET_ERROR();
@@ -34,6 +44,7 @@ void srv_ac_err_cb(evutil_socket_t fd, short ev, void* arg)
 }
 void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
 {
+    (void)ev;
     struct server_config* server_conf = (struct server_config*)arg;
     //----------------------------------------------------------------------
     int SlaveSocket = accept(fd, 0, 0);
@@ -59,6 +70,7 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
         return;
     }
     Client->ht = server_conf->ht;
+    Client->dict_path = server_conf->dict_path;
     //----------------------------------------------------------------------
     /* Create new bufferized event, linked with client's socket */
     if (!(Client->b_ev =
@@ -98,6 +110,7 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
 //-----------------------------------------
 void srv_error_cb(struct bufferevent* b_ev, short events, void* arg)
 {
+    (void)b_ev;
     struct client* Client = (struct client*)arg;
     //----------------------------------------------------------------------
 #ifdef _DEBUG
@@ -108,7 +121,7 @@ void srv_error_cb(struct bufferevent* b_ev, short events, void* arg)
 #endif // _DEBUG
     if (events & BEV_EVENT_EOF) {
 #ifdef _DEBUG
-        printf("got a close. length = %u\n",
+        printf("got a close. length = %zu\n",
                evbuffer_get_length(bufferevent_get_input(Client->b_ev)));
 #endif // _DEBUG
         shutdown(bufferevent_getfd(Client->b_ev), SHUT_RDWR);
@@ -138,32 +151,30 @@ void srv_read_cb(struct bufferevent* b_ev, void* arg)
     struct evbuffer* buf_out = bufferevent_get_output(b_ev);
 
     /* Copy all the data from the input buffer to the output buffer. */
-    find_words_prefix(buf_in, buf_out, Client->ht);
+    find_words_prefix(buf_in, buf_out, Client->ht, Client->dict_path);
     //----------------------------------------------------------------------
 #ifdef _DEBUG
     printf("response ready\n");
 #endif // _DEBUG
 }
 //-----------------------------------------
-void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struct hash_table* ht)
+void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struct hash_table* ht,
+                       const char* dict_path)
 {
-    // char      words[DICT_WORD_CNT][DICT_WORD_LEN];
-    // size_t  weights[DICT_WORD_CNT];
     char* prefix = NULL;
     size_t prefix_length = 0U;
     //-----------------------------------------------------------------
     ht_rec rec = {0};
     //-----------------------------------------------------------------
-    FILE* fdict = fopen(SRV_DICT_FLNAME, "r");
+    FILE* fdict = fopen(dict_path, "r");
     if (!fdict) {
         perror("dict file");
         goto HNDL_FREE;
     }
 
     while ((prefix = evbuffer_readln(buf_inc, &prefix_length, EVBUFFER_EOL_ANY))) {
-        // int     count = 0;
         char word[DICT_WORD_LEN];
-        size_t weight = 0;
+        int weight = 0;
 
 #ifdef _DEBUG
         printf("\n\n--> %s\n", prefix);
@@ -212,12 +223,6 @@ void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struc
         hashtable_set(ht, &rec);
         //-----------------------------------------------------------------
         free(prefix);
-        continue;
-
-    REQ_ERR:;
-        my_errno = SRV_ERR_RCMMN;
-        fprintf(stderr, "%s", strmyerror());
-        free(prefix);
     }
     //-----------------------------------------------------------------
 HNDL_FREE:;
@@ -229,54 +234,3 @@ HNDL_FREE:;
     //----------------------------------------------------------------------
 }
 //-----------------------------------------
-#ifdef _TEST
-#define _TEST
-int main()
-{
-    int i = 0;
-    hashtable ht = {0};
-
-    hashtable_init(&ht, DICT_CACHELNS, 0, my_key_comp);
-    ;
-    ht_rec rec = {0};
-    /* Test words from mydict.txt, as UTF-8 escapes: "abbat" (abbot),
-     * "abbatstvo" (abbey), "abbatskiy" (abbatial). */
-
-    rec.ttl = ttl_converted(3);
-    strcpy(rec.key.word, "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82");
-
-    strcpy(rec.val.words[0],
-           "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82\xd1\x81\xd1\x82\xd0\xb2\xd0\xbe");
-    rec.val.weights[0] = 9;
-    strcpy(rec.val.words[1], "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82");
-    rec.val.weights[1] = 8;
-    strcpy(rec.val.words[2],
-           "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82\xd1\x81\xd0\xba\xd0\xb8\xd0\xb9");
-    rec.val.weights[2] = 7;
-
-    hashtable_set(&ht, &rec);
-
-    memset(&rec, 0, sizeof(rec));
-    strcpy(rec.key.word, "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82");
-
-    hashtable_get(&ht, &rec);
-    printf("\n%s %lf\n", rec.key.word, difftime(time(NULL), rec.ttl));
-    printf("%s %d\n", rec.val.words[0], rec.val.weights[0]);
-    printf("%s %d\n", rec.val.words[1], rec.val.weights[1]);
-    printf("%s %d\n", rec.val.words[2], rec.val.weights[2]);
-
-    memset(&rec, 0, sizeof(rec));
-    strcpy(rec.key.word, "\xd0\xb0\xd0\xb1\xd0\xb1\xd0\xb0\xd1\x82");
-
-    sleep(3);
-    hashtable_get(&ht, &rec);
-    printf("\n%s %lf\n", rec.key.word, difftime(time(NULL), rec.ttl));
-    printf("%s %d\n", rec.val.words[0], rec.val.weights[0]);
-    printf("%s %d\n", rec.val.words[1], rec.val.weights[1]);
-    printf("%s %d\n", rec.val.words[2], rec.val.weights[2]);
-
-    hashtable_free(&ht);
-
-    return 0;
-}
-#endif // _TEST

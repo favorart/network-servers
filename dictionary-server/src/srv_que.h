@@ -1,7 +1,8 @@
-#include "header.h"
-
 #ifndef _WORKQUEUE_H_
 #define _WORKQUEUE_H_
+
+#include <pthread.h>
+#include <stdbool.h>
 //-----------------------------------------
 typedef struct worker worker_t;
 /** @brief Worker thread of the work queue (item of a doubly linked list). */
@@ -28,8 +29,6 @@ struct job
     struct job* next;
 };
 
-/** @brief Job function: run the client's event loop, then free the client and the job. */
-void server_job_function(job_t* job);
 //-----------------------------------------
 typedef struct workqueue wque_t;
 /** @brief Work queue: worker threads and waiting jobs, guarded by a mutex and a condition variable.

@@ -1,24 +1,31 @@
-#include "header.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <event2/event.h>
+
 #include "srv.h"
 
 //-----------------------------------------
 int main(int argc, char** argv)
 {
     int result = 0;
+    int MasterSocket = -1;
+    struct event* ev = NULL;
     //-------------------------------------------
     /* Read the server configuration from the command-line parameters */
-    // if ( parse_console_parameters (argc, argv, &server_conf) )
-    // {
-    //   fprintf (stderr, "%s\n", strerror (errno));
-    //   result = 1;
-    //   goto MARK_FREE;
-    // }
     struct server_config server_conf = {0};
-    server_config_init(&server_conf, NULL, NULL, NULL);
+    int parsed = parse_console_parameters(argc, argv, &server_conf);
+    if (parsed)
+        return (parsed > 0) ? 0 : 2;
     server_config_print(&server_conf, stdout);
 
     /* Create the listening socket */
-    int MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (MasterSocket == -1) {
         fprintf(stderr, "%s\n", strerror(errno));
         result = 1;
@@ -62,26 +69,29 @@ int main(int argc, char** argv)
         goto MARK_FREE;
     }
     //-------------------------------------------
-    /* Init events */
-    struct event ev;
-    /* Create a new event, that react to read drom server's socket - event of connecting the new
-     * client */
-    /* Set connection callback (on_connect()) to read event on server socket */
-    event_set(&ev, MasterSocket, EV_READ | EV_PERSIST, srv_accept_cb, &server_conf);
-    /* Attach ev_connect event to my event base */
-    event_base_set(server_conf.base, &ev);
-    /* Add server event without timeout */
-    event_add(&ev, NULL);
+    /* A read event on the listening socket means a new client: srv_accept_cb() accepts it */
+    ev = event_new(server_conf.base, MasterSocket, EV_READ | EV_PERSIST, srv_accept_cb,
+                   &server_conf);
+    if (!ev || event_add(ev, NULL)) {
+        fprintf(stderr, "listener event failed\n");
+        result = 1;
+        goto MARK_FREE;
+    }
     /* Dispatch events */
     event_base_loop(server_conf.base, 0);
     //-------------------------------------------
 
 MARK_FREE:
     //-------------------------------------------
-    event_base_free(server_conf.base);
+    if (ev)
+        event_free(ev);
+    if (server_conf.base)
+        event_base_free(server_conf.base);
 
-    shutdown(MasterSocket, SHUT_RDWR);
-    close(MasterSocket);
+    if (MasterSocket != -1) {
+        shutdown(MasterSocket, SHUT_RDWR);
+        close(MasterSocket);
+    }
 
     server_config_free(&server_conf);
     //-------------------------------------------

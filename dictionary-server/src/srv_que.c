@@ -1,4 +1,8 @@
-#include "header.h"
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
 #include "srv_que.h"
 
 //-----------------------------------------

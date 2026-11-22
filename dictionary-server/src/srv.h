@@ -1,11 +1,8 @@
-#include "header.h"
-#include "srv_que.h"
-
 /*  Practice on threads (pthreads, std::threads, boost::threads)
  *  ! LINUX ARCHITECTURE !
  *
  *  v   Build with make.
- *  v   Run:  ./dict ...
+ *  v   Run:  ./dictionary-server ...
  *  v   On start the server creates 4 threads that handle client commands.
 
  *  v  A text file with words (each word is followed, after a space, by its int weight (0-99)) is
@@ -23,6 +20,23 @@
 #ifndef _SRV_DICT_H_
 #define _SRV_DICT_H_
 
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+#include <event2/util.h>
+
+#include "srv_que.h"
+
+struct bufferevent;
+struct event_base;
+struct evbuffer;
+struct hash_table;
+
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
+
 #define _DEBUG
 //-----------------------------------------
 /** @brief Server error codes, stored in my_errno. */
@@ -36,9 +50,10 @@ typedef enum
     SRV_ERR_RFREE,
     SRV_ERR_FDTRS
 } myerr;
-myerr my_errno;
+/** @brief Last server error (defined in srv_conf.c). */
+extern myerr my_errno;
 /** @brief Text for the current my_errno (NULL if none); resets my_errno. */
-const char* strmyerror();
+const char* strmyerror(void);
 //-----------------------------------------
 #define SRV_SERVER_NAME "dict-server-pract6"
 #define SRV_IPSTRLENGTH 16U
@@ -53,41 +68,46 @@ typedef struct server_config srv_conf;
 struct server_config
 {
     //-----------------------
-    char* ptr_server_name;
+    const char* ptr_server_name;
     //-----------------------
     uint16_t port;
     char ip[SRV_IPSTRLENGTH];
     //-----------------------
     /* defines FILENAME_MAX in <stdio.h> */
-    char config_path[FILENAME_MAX];
+    char dict_path[FILENAME_MAX];
     char server_path[FILENAME_MAX];
     //-----------------------
     wc_t workers_count;
-    worker_t* workers;
     wque_t workqueue;
     //-----------------------
     struct event_base* base;
     struct hash_table* ht;
 };
-extern struct server_config server_conf;
 //-----------------------------------------
 /**
- * @brief Fill the config (defaults for NULL arguments), start the worker threads
- *        and create the cache.
- * @param port Port string, default 8080.
- * @param ip   IPv4 address string, default "0.0.0.0".
- * @param work Number of worker threads, default 4.
- * @return 0; fatal errors exit.
+ * @brief Fill the config, start the worker threads and create the cache.
+ * @param port Port, 0..65535.
+ * @param ip   IPv4 address string, shorter than SRV_IPSTRLENGTH.
+ * @param work Number of worker threads, 1..SRV_MAX_WORKERS.
+ * @param dict Dictionary file path, or NULL for the default (see resolve_dict_path()).
+ * @return 0, or -1 on invalid arguments; fatal errors exit.
  */
-int server_config_init(srv_conf* conf, char* port, char* ip, char* work);
-/** @brief Print the server name, path, port and ip to @p stream. */
+int server_config_init(srv_conf* conf, uint16_t port, const char* ip, int work, const char* dict);
+/** @brief Print the server name, path, port, ip and dictionary to @p stream. */
 void server_config_print(srv_conf* conf, FILE* stream);
 /** @brief Free the cache, stop the worker threads and zero the config. */
 void server_config_free(srv_conf* conf);
+/**
+ * @brief Choose the dictionary file: @p dict if given, else ./mydict.txt if it exists,
+ *        else <binary dir>/mydict.txt if it exists, else <binary dir>/../data/mydict.txt.
+ * @param exe_path Absolute path of the server binary ("" if unknown).
+ * @param out      Buffer of FILENAME_MAX bytes for the result.
+ */
+void resolve_dict_path(const char* dict, const char* exe_path, char* out);
 //-----------------------------------------
 /**
- * @brief Parse -c/--conf (the value is not used yet) and init the config with defaults.
- * @return Result of server_config_init().
+ * @brief Parse the command line (see the usage text) and init the config.
+ * @return 0 to run the server, 1 to exit with success (-h, -v), -1 on invalid arguments.
  */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf);
 //-----------------------------------------
@@ -107,9 +127,12 @@ struct client
     struct event_base* base;
     //---------------------------
     struct hash_table* ht;
+    const char* dict_path;
 };
 /** @brief Free the client's bufferevent (closing the socket), its event base and the client. */
 void client_free(struct client* Client);
+/** @brief Job function: run the client's event loop, then free the client and the job. */
+void server_job_function(job_t* job);
 //-----------------------------------------
 /** @brief Listener callback: accept a connection, set up a client and queue a job for it. */
 void srv_accept_cb(evutil_socket_t fd, short ev, void* arg);
@@ -144,5 +167,12 @@ static inline int my_key_comp(ht_key_t* a, ht_key_t* b)
 {
     return strcmp(a->word, b->word);
 }
+//-----------------------------------------
+/**
+ * @brief Answer every prefix line of @p buf_inc into @p buf_out (one word per line),
+ *        using the cache @p ht and the dictionary file @p dict_path.
+ */
+void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struct hash_table* ht,
+                       const char* dict_path);
 //-----------------------------------------
 #endif // _SRV_DICT_H_
