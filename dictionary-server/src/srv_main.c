@@ -1,5 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
+#include <signal.h>
 #include <netinet/in.h>
 #include <stdio.h>
 #include <string.h>
@@ -11,11 +12,21 @@
 #include "srv.h"
 
 //-----------------------------------------
+/** @brief Signal callback: stop the main event loop (@p arg is its event base). */
+static void srv_signal_cb(evutil_socket_t sig, short ev, void* arg)
+{
+    (void)ev;
+    printf("got signal %d, shutting down\n", (int)sig);
+    event_base_loopexit((struct event_base*)arg, NULL);
+}
+//-----------------------------------------
 int main(int argc, char** argv)
 {
     int result = 0;
     int MasterSocket = -1;
     struct event* ev = NULL;
+    struct event* ev_term = NULL;
+    struct event* ev_int = NULL;
     //-------------------------------------------
     /* Read the server configuration from the command-line parameters */
     struct server_config server_conf = {0};
@@ -23,6 +34,8 @@ int main(int argc, char** argv)
     if (parsed)
         return (parsed > 0) ? 0 : 2;
     server_config_print(&server_conf, stdout);
+    /* A client that closes early must not kill the server with SIGPIPE. */
+    signal(SIGPIPE, SIG_IGN);
 
     /* Create the listening socket */
     MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -59,6 +72,10 @@ int main(int argc, char** argv)
         result = 1;
         goto MARK_FREE;
     }
+    /* Report the real port (useful with -p 0) */
+    socklen_t addr_len = sizeof(SockAddr);
+    if (!getsockname(MasterSocket, (struct sockaddr*)&SockAddr, &addr_len))
+        server_conf.port = ntohs(SockAddr.sin_port);
 
     //-------------------------------------------
     /* Initialize new event_base to do not overlay the global context */
@@ -77,6 +94,16 @@ int main(int argc, char** argv)
         result = 1;
         goto MARK_FREE;
     }
+    /* SIGTERM and SIGINT stop the loop; the workers are joined in server_config_free() */
+    ev_term = evsignal_new(server_conf.base, SIGTERM, srv_signal_cb, server_conf.base);
+    ev_int = evsignal_new(server_conf.base, SIGINT, srv_signal_cb, server_conf.base);
+    if (!ev_term || !ev_int || event_add(ev_term, NULL) || event_add(ev_int, NULL)) {
+        fprintf(stderr, "signal event failed\n");
+        result = 1;
+        goto MARK_FREE;
+    }
+    printf("listening on %s:%u\n", server_conf.ip, server_conf.port);
+    fflush(stdout);
     /* Dispatch events */
     event_base_loop(server_conf.base, 0);
     //-------------------------------------------
@@ -85,6 +112,10 @@ MARK_FREE:
     //-------------------------------------------
     if (ev)
         event_free(ev);
+    if (ev_term)
+        event_free(ev_term);
+    if (ev_int)
+        event_free(ev_int);
     if (server_conf.base)
         event_base_free(server_conf.base);
 

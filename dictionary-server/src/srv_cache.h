@@ -28,7 +28,7 @@ struct hashtable_line
     ht_rec data;
 };
 //-----------------------------------------
-/** @brief Hash table with open addressing; the mutex is used only with _LOCK. */
+/** @brief Hash table with linear probing; every get and set holds the mutex. */
 struct hash_table
 {
     char* shmemory;
@@ -47,20 +47,22 @@ time_t ttl_converted(int32_t ttl);
 /**
  * @brief Allocate and zero the table and set the key comparator.
  * @param lines_count Number of slots.
- * @param size        Memory size in bytes, raised to fit all slots.
+ * @param size        Memory size in bytes, raised to fit all slots (0: just enough).
  * @param key_comp    Returns 0 when two keys are equal.
  */
 void hashtable_init(hashtable* ht, size_t lines_count, size_t size,
                     int (*key_comp)(ht_key_t* a, ht_key_t* b));
-/** @brief Free the table memory. */
+/** @brief Free the table memory and the mutex; NULL is allowed. */
 void hashtable_free(hashtable* ht);
+/** @brief Hash of the key string (the bytes after its NUL are ignored). */
+hash_t ht_hash(const ht_key_t* key);
 /**
  * @brief Find data->key and copy the stored record into @p data.
  * @return false if found, true if the key is missing or expired.
  */
 bool hashtable_get(hashtable* ht, ht_rec* data);
 /**
- * @brief Insert or update the record for data->key.
+ * @brief Insert or update the record for data->key (an expired slot is reused).
  * @return false on success, true if there is no room for it.
  */
 bool hashtable_set(hashtable* ht, ht_rec* data);

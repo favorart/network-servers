@@ -15,7 +15,7 @@
  *  v  Between them: mutexes and conditional_variables.
  *
  *  -  There is also a cache that keeps the most recently requested words.
- *  -  The cache has a TTL and is shared (read/write lock)
+ *  -  The cache has a TTL and is shared (guarded by a mutex)
  */
 #ifndef _SRV_DICT_H_
 #define _SRV_DICT_H_
@@ -95,7 +95,7 @@ struct server_config
 int server_config_init(srv_conf* conf, uint16_t port, const char* ip, int work, const char* dict);
 /** @brief Print the server name, path, port, ip and dictionary to @p stream. */
 void server_config_print(srv_conf* conf, FILE* stream);
-/** @brief Free the cache, stop the worker threads and zero the config. */
+/** @brief Stop the worker threads (waiting for their clients), free the cache, zero the config. */
 void server_config_free(srv_conf* conf);
 /**
  * @brief Choose the dictionary file: @p dict if given, else ./mydict.txt if it exists,
@@ -129,7 +129,8 @@ struct client
     struct hash_table* ht;
     const char* dict_path;
 };
-/** @brief Free the client's bufferevent (closing the socket), its event base and the client. */
+/** @brief Free the client's bufferevent (closing the socket), its event base and the client;
+ *        NULL members (or a NULL client) are skipped. */
 void client_free(struct client* Client);
 /** @brief Job function: run the client's event loop, then free the client and the job. */
 void server_job_function(job_t* job);
@@ -139,9 +140,12 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg);
 /** @brief Listener error callback: log the error and stop the event loop. */
 void srv_ac_err_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
-/** @brief Read callback: answer each prefix line with up to 10 matching dictionary words. */
+/** @brief Read callback: answer each prefix line with up to 10 matching words, heaviest first. */
 void srv_read_cb(struct bufferevent* b_ev, void* arg);
-/** @brief Event callback: log EOF or an error and shut the socket down. */
+/**
+ * @brief Event callback: on EOF stop reading (the reply is still sent), on an error stop both
+ *        directions; the client's loop then ends and server_job_function() frees it.
+ */
 void srv_error_cb(struct bufferevent* b_ev, short events, void* arg);
 //-----------------------------------------
 #define DICT_CACHELNS 256
@@ -168,6 +172,17 @@ static inline int my_key_comp(ht_key_t* a, ht_key_t* b)
     return strcmp(a->word, b->word);
 }
 //-----------------------------------------
+/**
+ * @brief Add a word to @p rec, which stays sorted by weight (descending, equal weights in
+ *        insertion order) and keeps at most DICT_WORD_CNT words.
+ */
+void dict_rec_add(struct dict_rec* rec, const char* word, int weight);
+/**
+ * @brief Fill @p rec with the heaviest words of the dictionary that start with @p prefix.
+ * @param fdict Dictionary, "word weight" per line; it is read from the start, broken lines and
+ *              words longer than DICT_WORD_LEN - 1 bytes are skipped.
+ */
+void dict_lookup(FILE* fdict, const char* prefix, size_t prefix_length, struct dict_rec* rec);
 /**
  * @brief Answer every prefix line of @p buf_inc into @p buf_out (one word per line),
  *        using the cache @p ht and the dictionary file @p dict_path.
