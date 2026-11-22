@@ -102,7 +102,16 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:subscribe-server -->
+With 16 subscribers on one queue each publish is fanned out 16 times: the publisher gets about 5 thousand replies per second, while subscribers together receive about 85 thousand messages per second. The Clients column counts subscribers here.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| subscribe | publish -> ok, 1 publisher | 1 | 34078 | 28 | 43 | 0 |
+| subscribe | publish -> delivery to subscribers | 1 | 34078 | 41 | 57 | 0 |
+| subscribe | publish -> ok, 1 publisher | 16 | 5317 | 187 | 216 | 0 |
+| subscribe | publish -> delivery to subscribers | 16 | 85077 | 275 | 376 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

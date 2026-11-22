@@ -105,7 +105,16 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:proxy-server -->
+One extra hop doubles the latency of a single client; with 16 clients the single-threaded proxy becomes the bottleneck and passes about 4.5 times fewer round trips than the direct connection.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| proxy | echo 64 B, direct to the backend | 1 | 38432 | 27 | 38 | 0 |
+| proxy | echo 64 B, through the proxy | 1 | 17524 | 54 | 75 | 0 |
+| proxy | echo 64 B, direct to the backend | 16 | 166018 | 86 | 182 | 0 |
+| proxy | echo 64 B, through the proxy | 16 | 36980 | 405 | 632 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

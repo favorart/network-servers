@@ -96,7 +96,16 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:dictionary-server -->
+A cache hit costs about 0.1 ms; a miss rereads the whole dictionary file (about 11 ms), so misses are two orders of magnitude slower. The cache TTL is 10 s, so the hit rows hold only for short runs.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| dictionary | prefix, cache hit | 1 | 8376 | 118 | 149 | 0 |
+| dictionary | prefix, cache hit | 16 | 13275 | 694 | 8027 | 0 |
+| dictionary | prefix, cache miss | 1 | 90 | 11024 | 11486 | 0 |
+| dictionary | prefix, cache miss | 16 | 203 | 78611 | 82774 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

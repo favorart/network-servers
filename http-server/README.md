@@ -98,7 +98,14 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:http-server -->
+Every request opens a new TCP connection (the server closes it after the response), so this measures connection setup plus one file read; 16 clients with the default workers give about 2.7 times the single-client rate.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| http | GET 118 B html, new connection | 1 | 5699 | 174 | 211 | 0 |
+| http | GET 118 B html, new connection | 16 | 15678 | 898 | 3053 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

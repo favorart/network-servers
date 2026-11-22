@@ -91,7 +91,14 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:cache-server -->
+One semaphore guards the whole table, yet 16 clients with the default workers still reach about 90 thousand round trips per second with p99 under half a millisecond.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| cache | get/set 9:1, 200 keys | 1 | 32173 | 29 | 45 | 0 |
+| cache | get/set 9:1, 200 keys | 16 | 90528 | 163 | 471 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

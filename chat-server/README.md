@@ -92,7 +92,14 @@ make test SAN=1  # the same under ASan + UBSan, in build-san/
 
 ## Performance
 
-<!-- bench:chat-server -->
+The p99 of about 41 ms is most likely not the server loop: the sockets keep Nagle's algorithm on (no `TCP_NODELAY`), so a small line can wait for the delayed ACK of the previous one (about 40 ms on Linux). With 16 clients each line is delivered 16 times, hence the high count of delivered lines.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| chat | line fan-out, delivered lines | 2 | 188 | 145 | 41027 | 0 |
+| chat | line fan-out, delivered lines | 16 | 184522 | 320 | 41077 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](../bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## Bugs fixed in 2026
 

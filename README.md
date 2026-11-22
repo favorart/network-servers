@@ -67,7 +67,30 @@ Full usage with live sessions: [cache](cache-server/README.md), [chat](chat-serv
 
 ## Performance
 
-<!-- bench:all -->
+Throughput and latency of every server with 1 and 16 clients; each server README explains its rows.
+
+| Server | Scenario | Clients | Throughput, ops/s | p50, µs | p99, µs | Errors |
+|---|---|--:|--:|--:|--:|--:|
+| cache | get/set 9:1, 200 keys | 1 | 32173 | 29 | 45 | 0 |
+| cache | get/set 9:1, 200 keys | 16 | 90528 | 163 | 471 | 0 |
+| chat | line fan-out, delivered lines | 2 | 188 | 145 | 41027 | 0 |
+| chat | line fan-out, delivered lines | 16 | 184522 | 320 | 41077 | 0 |
+| dictionary | prefix, cache hit | 1 | 8376 | 118 | 149 | 0 |
+| dictionary | prefix, cache hit | 16 | 13275 | 694 | 8027 | 0 |
+| dictionary | prefix, cache miss | 1 | 90 | 11024 | 11486 | 0 |
+| dictionary | prefix, cache miss | 16 | 203 | 78611 | 82774 | 0 |
+| http | GET 118 B html, new connection | 1 | 5699 | 174 | 211 | 0 |
+| http | GET 118 B html, new connection | 16 | 15678 | 898 | 3053 | 0 |
+| proxy | echo 64 B, direct to the backend | 1 | 38432 | 27 | 38 | 0 |
+| proxy | echo 64 B, through the proxy | 1 | 17524 | 54 | 75 | 0 |
+| proxy | echo 64 B, direct to the backend | 16 | 166018 | 86 | 182 | 0 |
+| proxy | echo 64 B, through the proxy | 16 | 36980 | 405 | 632 | 0 |
+| subscribe | publish -> ok, 1 publisher | 1 | 34078 | 28 | 43 | 0 |
+| subscribe | publish -> delivery to subscribers | 1 | 34078 | 41 | 57 | 0 |
+| subscribe | publish -> ok, 1 publisher | 16 | 5317 | 187 | 216 | 0 |
+| subscribe | publish -> delivery to subscribers | 16 | 85077 | 275 | 376 | 0 |
+
+GitHub Actions `ubuntu-latest` runner, 3 s per scenario, measured by [bench/ns-bench.c](bench/ns-bench.c) in [this CI run](https://github.com/favorart/network-servers/actions/runs/45077696898) (release v0.0.11). Shared runners are noisy: compare the rows with each other, not with your machine. `make bench` reruns it; every push to `main` keeps a fresh table in the `bench` job summary.
 
 ## What the tests found
 
