@@ -1,0 +1,126 @@
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <syslog.h>
+#include <unistd.h>
+
+#include <event.h>
+
+#include "http_error.h"
+#include "http_server.h"
+
+//-----------------------------------------
+int main(int argc, char** argv)
+{
+    int result = 0;
+    int MasterSocket = -1;
+    struct event_base* base = NULL;
+
+#ifdef HTTP_SYSLOG
+    // setlogmask (LOG_UPTO (LOG_NOTICE));
+    openlog(HTTP_SERVER_NAME, LOG_PERROR /*LOG_CONS | LOG_PID | LOG_NDELAY*/, LOG_LOCAL1);
+#endif
+
+    /* Read the server configuration from the command line parameters */
+    if (parse_console_parameters(argc, argv, &server_conf)) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        result = 1;
+        goto MARK_FREE;
+    }
+
+    /* Master Process */
+    if (!server_conf.myself) {
+        http_server_config_print(&server_conf, stdout);
+
+        /* Create the listening socket */
+        if (-1 == (MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))) {
+            fprintf(stderr, "%s\n", strerror(errno));
+            result = 1;
+            goto MARK_FREE;
+        }
+
+        int so_reuseaddr = 1; /* Manipulate the flags set on the socket */
+        if (setsockopt(MasterSocket, SOL_SOCKET, SO_REUSEADDR, &so_reuseaddr,
+                       sizeof(so_reuseaddr))) {
+            fprintf(stderr, "%s\n", strerror(errno));
+            result = 1;
+            goto MARK_FREE;
+        }
+
+        struct sockaddr_in SockAddr = {0};
+        SockAddr.sin_family = AF_INET;
+        SockAddr.sin_port = htons(server_conf.port);
+        SockAddr.sin_addr.s_addr = inet_addr(server_conf.ip);
+
+        int Result = bind(MasterSocket, (struct sockaddr*)&SockAddr, sizeof(SockAddr));
+        if (Result == -1) {
+            fprintf(stderr, "%s\n", strerror(errno));
+            result = 1;
+            goto MARK_FREE;
+        }
+
+        set_nonblock(MasterSocket);
+
+        Result = listen(MasterSocket, SOMAXCONN);
+        if (Result == -1) {
+            fprintf(stderr, "%s\n", strerror(errno));
+            result = 1;
+            goto MARK_FREE;
+        }
+    }
+
+    /*  A server that serves several clients at the same time.
+     *  It needs a listening socket that can accept connections
+     *  asynchronously, a connection handler and the client logic.
+     */
+
+    /* Initialize new event_base to do not overlay the global context */
+    base = event_base_new();
+    if (!base) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        result = 1;
+        goto MARK_FREE;
+    }
+
+    //-------------------------------------------
+    /* Init events */
+    struct event ev;
+    /* Master Process */
+    if (!server_conf.myself) {
+        /* Create a new event, that react to read drom server's socket - event of connecting the new
+         * client */
+        /* Set connection callback (on_connect()) to read event on server socket */
+        event_set(&ev, MasterSocket, EV_READ | EV_PERSIST, http_accept_cb, base);
+        /* Attach ev_connect event to my event base */
+        event_base_set(base, &ev);
+        /* Add server event without timeout */
+        event_add(&ev, NULL);
+    } else {
+        event_set(&ev, server_conf.myself->fd, EV_READ | EV_PERSIST, http_connect_cb, base);
+        event_base_set(base, &ev);
+        event_add(&ev, NULL);
+    }
+    /* Dispatch events */
+    event_base_loop(base, 0);
+    //-------------------------------------------
+
+MARK_FREE:
+    //-------------------------------------------
+    if (base)
+        event_base_free(base);
+
+    if (MasterSocket != -1) {
+        shutdown(MasterSocket, SHUT_RDWR);
+        close(MasterSocket);
+    }
+
+    http_server_config_free(&server_conf);
+
+    closelog();
+    //-------------------------------------------
+    return result;
+}
+//-----------------------------------------

@@ -1,0 +1,153 @@
+#include <errno.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include "http_error.h"
+#include "http_server.h"
+
+#ifndef NS_VERSION
+#define NS_VERSION "0.0.0"
+#endif
+
+//-----------------------------------------
+int set_nonblock(evutil_socket_t fd)
+{
+    int flags;
+#ifdef O_NONBLOCK
+    if (-1 == (flags = fcntl(fd, F_GETFL, 0)))
+        flags = 0;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+#else
+    flags = 1;
+    return ioctl(fd, FIOBIO, &flags);
+#endif
+}
+//-----------------------------------------
+int http_server_config_init(srv_conf* conf, char* path, char* port, char* ip, char* work)
+{
+    //-----------------------
+    const uint16_t max_port = 65535U;
+    if (!port || (conf->port = atoi(port)) > max_port) {
+        my_errno = HTTP_ERR_INPUT;
+        fprintf(stderr, "%s\n", strmyerror());
+        conf->port = 8080;
+    }
+    //-----------------------
+    struct stat sb;
+    if (path && stat(path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+        strcpy(conf->folder_path, path);
+    } else {
+        my_errno = HTTP_ERR_INPUT;
+        fprintf(stderr, "%s\n", strmyerror());
+        strcpy(conf->folder_path, "data/");
+    }
+    //-----------------------
+    if (ip && strlen(ip) < HTTP_IPSTRLENGTH) {
+        strcpy(conf->ip, ip);
+    } else {
+        my_errno = HTTP_ERR_INPUT;
+        fprintf(stderr, "%s\n", strmyerror());
+        strcpy(conf->ip, "0.0.0.0");
+    }
+    //-----------------------
+    if (!work || (conf->workers = atoi(work)) > HTTP_MAX_WORKERS) {
+        my_errno = HTTP_ERR_INPUT;
+        fprintf(stderr, "%s\n", strmyerror());
+        conf->workers = 4U;
+    }
+    //-----------------------
+    if (!(conf->child_workers = calloc(conf->workers, sizeof(*conf->child_workers)))) {
+        perror("child_workers");
+        exit(EXIT_FAILURE);
+    }
+
+    for (wc_t i = 0U; i < conf->workers; ++i) {
+        if (!child_worker_init(&conf->child_workers[i])) {
+            conf->myself = &conf->child_workers[i];
+            conf->workers = (i + 1);
+            break;
+        } else
+            (conf->myself = NULL);
+    }
+    //-----------------------
+    /* exec working directory */
+
+    int bytes = 0U;
+    if (0 >= (bytes = readlink("/proc/self/exe", conf->server_path, FILENAME_MAX - 1U))) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        strcpy(conf->server_path, "");
+    } else
+        conf->server_path[bytes] = '\0';
+    //-----------------------
+    conf->ptr_server_name = HTTP_SERVER_NAME;
+    //-----------------------
+    return 0;
+}
+void http_server_config_print(srv_conf* conf, FILE* stream)
+{
+    fprintf(stream,
+            ">>> http server config:\n\n\tname: '%s'   server path: '%s'\n"
+            "\tpath: '%s'\n\tport: %u   ip: '%s'\n\tworkers count: %u\n\n",
+            conf->ptr_server_name, conf->server_path, conf->folder_path, conf->port, conf->ip,
+            conf->workers);
+}
+void http_server_config_free(srv_conf* conf)
+{
+    //-----------------------
+    memset(conf, 0, sizeof(*conf));
+}
+//-----------------------------------------
+int parse_console_parameters(int argc, char** argv, srv_conf* conf)
+{
+    char *dir_opt = NULL, *port_opt = NULL, *ip_opt = NULL, *work_opt = NULL;
+    static struct option long_options[] = {
+        {"dir", required_argument, 0, 'd'},  {"ip", required_argument, 0, 'h'},
+        {"port", required_argument, 0, 'p'}, {"workers", required_argument, 0, 'w'},
+        {"version", no_argument, 0, 'v'},    {0, 0, 0, 0}};
+    //-----------------------
+    int c;
+    while (-1 != (c = getopt_long(argc, argv, "d:h:p:w:v", long_options, NULL))) {
+        switch (c) {
+        case 'd':
+            dir_opt = optarg;
+            break;
+        case 'h':
+            ip_opt = optarg;
+            break;
+        case 'p':
+            port_opt = optarg;
+            break;
+        case 'w':
+            work_opt = optarg;
+            break;
+        case 'v':
+            printf("%s %s\n", HTTP_SERVER_NAME, NS_VERSION);
+            exit(EXIT_SUCCESS);
+
+        case '?':
+            /* getopt_long already printed an error message. */
+            printf("using:\n./http-server -d|--dir <dir> -h|--ip <ip> -p|--port <port> "
+                   "-w|--workers <num> | -v|--version\n\n");
+            break;
+
+        default:
+            printf("?? getopt returned character code 0%o ??\n", c);
+            break;
+        }
+    }
+    //-----------------------
+    if (optind < argc) {
+        printf("non-option ARGV-elements: ");
+        while (optind < argc)
+            printf("%s ", argv[optind++]);
+        printf("\n");
+    }
+    //-----------------------
+    return http_server_config_init(conf, dir_opt, port_opt, ip_opt, work_opt);
+}
+//-----------------------------------------

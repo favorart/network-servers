@@ -1,20 +1,52 @@
 # Builds the chat server (epoll) and its console client (select), Linux only.
-BIN      := chat-server chat-client
+# make [all|test|clean|print-bin] [SAN=1] [RUN='setarch -R']
+BUILD    := build$(if $(SAN),-san)
+SERVER   := $(BUILD)/chat-server
+CLIENT   := $(BUILD)/chat-client
+
 CFLAGS   ?= -O2 -g
 CXXFLAGS ?= -O2 -g
+override CFLAGS   += -std=gnu11 -Wall -Wextra -Wpedantic -Werror
+override CXXFLAGS += -std=c++17 -Wall -Wextra -Wpedantic -Werror
+override CPPFLAGS += -MMD -MP
 
-all: $(BIN)
+ifdef SAN
+SANFLAGS := -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all
+override CFLAGS   += $(SANFLAGS)
+override CXXFLAGS += $(SANFLAGS)
+endif
 
-chat-server: epoll.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -std=gnu11 $< -o $@ $(LDFLAGS)
+# Wrapper for running test binaries, e.g. RUN='setarch -R' for ASan under WSL.
+RUN ?=
 
-chat-client: select.cpp
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -std=c++11 $< -o $@ $(LDFLAGS)
+LIB_SRCS := src/chat_server.c
+LIB_OBJS := $(LIB_SRCS:src/%.c=$(BUILD)/%.o)
+
+all: $(SERVER) $(CLIENT)
+
+$(BUILD):
+	mkdir -p $@
+
+$(BUILD)/%.o: src/%.c | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/%.o: src/%.cpp | $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+
+$(SERVER): $(BUILD)/main.o $(LIB_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+
+$(CLIENT): $(BUILD)/chat_client.o
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
+
+test: all
 
 clean:
-	rm -f $(BIN)
+	rm -rf build build-san
 
 print-bin:
-	@echo $(BIN)
+	@echo $(SERVER) $(CLIENT)
 
-.PHONY: all clean print-bin
+-include $(wildcard $(BUILD)/*.d)
+
+.PHONY: all test clean print-bin

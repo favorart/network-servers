@@ -1,4 +1,5 @@
-# Builds every server (Linux only): make [all|clean|dist|format|format-check]
+# Builds and tests every server (Linux only):
+#   make [all|test|clean|dist|format|format-check] [SAN=1 for ASan + UBSan]
 SERVERS := cache-server chat-server dictionary-server http-server proxy-server subscribe-server
 
 # Version from the latest tag (0.0.5, 0.0.5-3-gabc1234); CI passes the next tag.
@@ -11,6 +12,9 @@ export CPPFLAGS += -DNS_VERSION=\"$(VERSION)\"
 all:
 	for s in $(SERVERS); do $(MAKE) -C $$s all || exit 1; done
 
+test:
+	for s in $(SERVERS); do $(MAKE) -C $$s test || exit 1; done
+
 clean:
 	for s in $(SERVERS); do $(MAKE) -C $$s clean || exit 1; done
 	rm -f network-servers-*.tar.gz
@@ -20,6 +24,7 @@ DIST := network-servers-$(VERSION)-linux-$(shell uname -m)
 dist: all
 	mkdir $(DIST)
 	for s in $(SERVERS); do for b in $$($(MAKE) -s -C $$s print-bin); do cp $$s/$$b $(DIST)/; done; done
+	for s in $(SERVERS); do if [ -d $$s/data ]; then cp $$s/data/* $(DIST)/; fi; done
 	tar -czf $(DIST).tar.gz $(DIST)
 	rm -r $(DIST)
 
@@ -32,4 +37,4 @@ format:
 format-check:
 	$(CLANG_FORMAT) --dry-run -Werror $(FORMAT_SRCS)
 
-.PHONY: all clean dist format format-check
+.PHONY: all test clean dist format format-check
