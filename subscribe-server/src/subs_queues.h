@@ -13,7 +13,7 @@ struct server_config;
 class QueuesManager
 {
     size_t n_;
-    bool news_;
+    bool news_ = false;
     std::vector<std::queue<std::string>> queues_;
 
 public:
@@ -26,7 +26,7 @@ public:
         if (!n)
             n = 1;
         n_ = n;
-        queues_.reserve(n);
+        queues_.resize(n);
     }
     /** @brief Number of queues. */
     size_t n() { return n_; }
@@ -34,7 +34,7 @@ public:
     bool news() { return news_; }
 
     /** @brief Push @p message into queue @p n and mark that there is news. */
-    void publish(size_t n, char* message)
+    void publish(size_t n, const char* message)
     {
         queues_[n].push(message);
         news_ = true;

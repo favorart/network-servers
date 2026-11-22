@@ -112,6 +112,15 @@ void subs_error_cb(struct bufferevent* b_ev, short events, void* arg)
 #endif // _DEBUG
     }
 }
+void subs_clients_free(struct server_config* conf)
+{
+    for (client* Client : conf->clients) {
+        delete Client->queues_subscribed;
+        bufferevent_free(Client->b_ev);
+        free(Client);
+    }
+    conf->clients.clear();
+}
 void subs_read_cb(struct bufferevent* b_ev, void* arg)
 {
 #ifdef _DEBUG

@@ -18,7 +18,7 @@ void QueuesManager::broadcast(struct server_config* config)
                 struct evbuffer* buf_out = bufferevent_get_output(Client->b_ev);
                 if (Client->queues_subscribed->find(i) != Client->queues_subscribed->end())
                     evbuffer_add_printf(buf_out, "<que %zu>  %s%s", i, message.c_str(),
-                                        (message[message.size() - 1] == '\n') ? "" : "\n");
+                                        (!message.empty() && message.back() == '\n') ? "" : "\n");
             }
             queues_[i].pop();
         }
@@ -39,13 +39,15 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
     const char* const cmd_sub = "subscribe";
     const char* const cmd_pub = "publish";
 
-    const char* err_answer = "";
-    int no_answer = 0;
     //-----------------------------------------------------------------
     char* cmd = NULL;
     size_t cmd_length = 0U;
 
     while ((cmd = evbuffer_readln(buf_in, &cmd_length, EVBUFFER_EOL_ANY))) {
+        /* the reply state belongs to one command line */
+        const char* err_answer = "";
+        int no_answer = 0;
+
         char* cmd_cur_char = cmd;
         int n = 0;
         //-----------------------------------------------------------------
@@ -119,7 +121,9 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
         free(cmd);
     }
     //-----------------------------------------------------------------
-    evbuffer_drain(buf_in, -1);
+    /* keep an incomplete line for the next read, unless it is too long */
+    if (evbuffer_get_length(buf_in) > SRV_MAX_LINE)
+        evbuffer_drain(buf_in, evbuffer_get_length(buf_in));
     return;
 }
 //-----------------------------------------
