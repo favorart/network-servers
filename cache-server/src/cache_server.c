@@ -4,12 +4,12 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "cache_error.h"
 #include "cache_hash.h"
 #include "cache.h"
 
-void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf_out);
 //-----------------------------------------
 void cache_accept_cb(evutil_socket_t fd, short ev, void* arg)
 {
@@ -25,7 +25,10 @@ void cache_accept_cb(evutil_socket_t fd, short ev, void* arg)
     set_nonblock(SlaveSocket);
     //----------------------------------------------------------------------
     wc_t r = (rand() % server_conf->workers);
-    child_worker_send(&server_conf->child_workers[r], CHWMSG_TASK, SlaveSocket);
+    if (0 >= child_worker_send(&server_conf->child_workers[r], CHWMSG_TASK, SlaveSocket))
+        fprintf(stderr, "cannot pass the connection to worker %u\n", r);
+    /* The worker has its own copy now (or the connection is dropped) */
+    close(SlaveSocket);
     //----------------------------------------------------------------------
 #ifdef _DEBUG
     printf("connection accepted\n");
@@ -39,37 +42,48 @@ void cache_connect_cb(evutil_socket_t fd, short ev, void* arg)
     (void)ev;
     struct server_config* server_conf = (struct server_config*)arg;
     //----------------------------------------------------------------------
-    /* Making the new client */
-    struct client* Client = (struct client*)calloc(1U, sizeof(*server_conf));
-    if (!Client) {
-        fprintf(stderr, "%s\n", strerror(errno));
+    evutil_socket_t SlaveSocket = -1;
+    chwmsg_enum msg = CHWMSG_NONE;
+    if (0 > child_worker_recv(server_conf->myself, &msg, &SlaveSocket) || msg == CHWMSG_TERM) {
+        /* The master closed its end or asked to stop */
+        if (SlaveSocket != -1)
+            close(SlaveSocket);
+        event_base_loopexit(server_conf->base, NULL);
         return;
     }
-
+    if (msg != CHWMSG_TASK || SlaveSocket == -1) {
+        if (SlaveSocket != -1)
+            close(SlaveSocket);
+        return;
+    }
+    //----------------------------------------------------------------------
+    /* Making the new client */
+    struct client* Client = (struct client*)calloc(1U, sizeof(*Client));
+    if (!Client) {
+        fprintf(stderr, "%s\n", strerror(errno));
+        close(SlaveSocket);
+        return;
+    }
     Client->base = server_conf->base;
     Client->ht = server_conf->ht;
     //----------------------------------------------------------------------
-    evutil_socket_t SlaveSocket = -1;
-    chwmsg_enum msg;
-    child_worker_recv(server_conf->myself, &msg, &SlaveSocket);
-
-    if (msg == CHWMSG_TERM) {
-        event_base_loopexit(server_conf->base, NULL);
-    } else {
-        //----------------------------------------------------------------------
-        /* Create new bufferized event, linked with client's socket */
-        Client->b_ev =
-            bufferevent_socket_new(server_conf->base, SlaveSocket, BEV_OPT_CLOSE_ON_FREE);
-        bufferevent_setcb(Client->b_ev, cache_read_cb, NULL, cache_error_cb, Client);
-        /* Ready to get data */
-        bufferevent_enable(Client->b_ev, EV_READ | EV_WRITE | EV_PERSIST);
-        //----------------------------------------------------------------------
-        bufferevent_setwatermark(Client->b_ev, EV_WRITE, SRV_BUF_LOWMARK, 0);
-        //----------------------------------------------------------------------
-#ifdef _DEBUG
-        printf("connection to worker # %d\n", server_conf->workers);
-#endif
+    /* Create new bufferized event, linked with client's socket */
+    Client->b_ev = bufferevent_socket_new(server_conf->base, SlaveSocket, BEV_OPT_CLOSE_ON_FREE);
+    if (!Client->b_ev) {
+        fprintf(stderr, "bufferevent_socket_new failed\n");
+        close(SlaveSocket);
+        free(Client);
+        return;
     }
+    bufferevent_setcb(Client->b_ev, cache_read_cb, NULL, cache_error_cb, Client);
+    /* Ready to get data */
+    bufferevent_enable(Client->b_ev, EV_READ | EV_WRITE | EV_PERSIST);
+    //----------------------------------------------------------------------
+    bufferevent_setwatermark(Client->b_ev, EV_WRITE, SRV_BUF_LOWMARK, 0);
+    //----------------------------------------------------------------------
+#ifdef _DEBUG
+    printf("connection to worker # %d\n", server_conf->workers);
+#endif
 }
 //-----------------------------------------
 void cache_error_cb(struct bufferevent* b_ev, short events, void* arg)
@@ -153,13 +167,14 @@ void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf
     const char* const err_prefix = "cache handling";
     const char* const cmd_get = "get";
     const char* const cmd_set = "set";
-    const char* err_answer = "";
-    int no_answer = 0;
     //-----------------------------------------------------------------
     char* cmd = NULL;
     size_t cmd_length = 0U;
 
     while ((cmd = evbuffer_readln(buf_in, &cmd_length, EVBUFFER_EOL_ANY))) {
+        /* every command gets its own answer */
+        const char* err_answer = "";
+        int no_answer = 0;
         char* cmd_cur_char = cmd;
         int n = 0;
         //-----------------------------------------------------------------
@@ -227,7 +242,12 @@ void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf
         free(cmd);
     }
     //-----------------------------------------------------------------
-    evbuffer_drain(buf_in, -1);
+    /* An incomplete line waits for the rest of it, unless it is too long */
+    size_t rest = evbuffer_get_length(buf_in);
+    if (rest > CACHE_MAX_LINE) {
+        evbuffer_drain(buf_in, rest);
+        evbuffer_add_printf(buf_out, "error : command too long\n");
+    }
     return;
 }
 //-----------------------------------------

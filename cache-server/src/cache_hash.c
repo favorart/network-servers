@@ -21,27 +21,22 @@ void hashtable_init(hashtable* ht, size_t lines_count, size_t shm_size)
     //------------------------------------------
     ht->lines_count = lines_count;
     if (sizeof(ht_line) * lines_count > shm_size) {
-        perror("ht size");
         ht->shm_size = lines_count * sizeof(ht_line);
     } else {
         ht->shm_size = shm_size;
     }
     //-----------------------------------------
-#ifdef _DEBUG
-    static char mem[CACHELINES * sizeof(ht_line)] = {0};
-    ht->shmemory = mem;
-    ht->lines = (ht_line*)ht->shmemory;
-#endif // _DEBUG
     mysem_val_t val = 1;
     /* Create one semaphore, initialized */
     ht->tb_semid = mysem_create(1U, &val);
 
-    /* Create the shared memory */
+    /* Create the shared memory: the forked workers share the table through it */
     ht->tb_shmid = myshm_create(ht->shm_size);
     ht->shmemory = myshm_append(ht->tb_shmid);
+    ht->lines = (ht_line*)ht->shmemory;
 
     /* Initialize the shared memory */
-    memset(ht->shmemory, 0, shm_size);
+    memset(ht->shmemory, 0, ht->shm_size);
     //-----------------------------------------
     return;
 }
@@ -62,106 +57,89 @@ static hash_t hash(int32_t key)
 
     return (hash_t)h;
 }
-static hash_t hashtable_walk(hashtable* ht, ht_rec* data, hash_t he, bool isget)
+/* Home slot of a key */
+static size_t hashtable_home(const hashtable* ht, ht_key_t key)
 {
-    hash_t h = he, h_ret = h;
-    //-----------------------------------------
-    /* walk along the open addressing */
-    while ((h < ht->lines_count) && ht->lines[h].busy) {
-        hash_t hn = hash(ht->lines[h + 1U].data.key) % ht->lines_count;
-        /* if we meet an expired ttl */
-        if (ttl_completed(ht->lines[h].data.ttl)) {
-            /* if there is nothing ahead in the open addressing */
-            if (((h + 1U) >= ht->lines_count) || !ht->lines[h + 1U].busy ||
-                ((h + 1U) == hn)
-                /* or the hash of the next element is greater than the hash of the current one */
-                || ((he < hn) && !isget)) {
-                ht->lines[h].busy = false;
-                h_ret = h;
+    return hash(key) % ht->lines_count;
+}
+/* Free slot i (linear probing, backward-shift deletion): the later records of the
+ * same cluster move back so that each stays reachable from its home slot. */
+static void hashtable_erase(hashtable* ht, size_t i)
+{
+    const size_t n = ht->lines_count;
+    size_t j = i;
+    while (true) {
+        ht->lines[i].busy = false;
+        while (true) {
+            j = (j + 1U) % n;
+            if (!ht->lines[j].busy)
+                return;
+            size_t k = hashtable_home(ht, ht->lines[j].data.key);
+            /* the record at j stays if its home k is cyclically in (i, j] */
+            bool stays = (i <= j) ? (i < k && k <= j) : (i < k || k <= j);
+            if (!stays)
                 break;
-            } /* found the required index - finish */
-
-            hash_t hc = ++h;
-            /* while in the open addressing: the index of the next element is greater than its hash
-             */
-            while ((h < ht->lines_count) && ht->lines[h].busy && (h > hn)) {
-                hn = hash(ht->lines[++h].data.key) % ht->lines_count;
-            }
-
-            /* shift the next one into this place */
-            memmove(&ht->lines[hc - 1U], &ht->lines[hc], (h - hc) * sizeof(ht_line));
-
-            ht->lines[h - 1U].busy = false;
-            h = hc;
-        } else if (ht->lines[h].data.key == data->key) {
-            h_ret = h;
-            break;
-        } else if (he < h) {
-            /* move the records apart */
-            hash_t hc = h;
-            while ((h < ht->lines_count) && ht->lines[h].busy) {
-                if (ttl_completed(ht->lines[h].data.ttl)) {
-                    ht->lines[h].busy = false;
-                    break;
-                }
-                ++h;
-            }
-
-            if (h >= ht->lines_count) {
-                break;
-            }
-
-            /* moving the records apart */
-            memmove(&ht->lines[hc + 1U], &ht->lines[hc], (h - hc) * sizeof(ht_line));
-            ht->lines[hc].busy = false;
-
-            h_ret = hc;
-            break;
         }
-
-        ++h;
-        h_ret = h;
-    } // end while
-    //-----------------------------------------
-    return h_ret;
+        ht->lines[i] = ht->lines[j];
+        i = j;
+    }
+}
+/* Slot holding the key, or the free slot for it, or lines_count if the table is full.
+ * Expired records met on the way are removed. */
+static size_t hashtable_find(hashtable* ht, ht_key_t key)
+{
+    const size_t n = ht->lines_count;
+    const size_t home = hashtable_home(ht, key);
+    size_t i = home;
+    for (size_t probes = 0U; probes < n;) {
+        ht_line* line = &ht->lines[i];
+        if (!line->busy)
+            return i;
+        if (ttl_completed(line->data.ttl)) {
+            /* the records of a wrapped cluster may have moved: probe again from the start */
+            hashtable_erase(ht, i);
+            i = home;
+            probes = 0U;
+            continue;
+        }
+        if (line->data.key == key)
+            return i;
+        i = (i + 1U) % n;
+        ++probes;
+    }
+    return n;
 }
 //-----------------------------------------
 bool hashtable_get(hashtable* ht, ht_rec* data)
 {
     mysem_lock(ht->tb_semid, 0);
 
-    hash_t he = hash(data->key) % ht->lines_count;
-    //-----------------------------------------
-    hash_t h = hashtable_walk(ht, data, he, true);
-    if ((h < ht->lines_count) && ht->lines[h].busy && (ht->lines[h].data.key == data->key)) {
+    size_t h = hashtable_find(ht, data->key);
+    bool missing = (h == ht->lines_count) || !ht->lines[h].busy;
+    if (!missing)
         *data = ht->lines[h].data;
-    } else {
-        h = ht->lines_count;
-    }
-    //-----------------------------------------
+        //-----------------------------------------
 #ifdef _DEBUG
-    printf("get he=%d h=%d\n", he, h);
+    printf("get key=%d h=%zu found=%d\n", data->key, h, !missing);
 #endif // _DEBUG
 
     mysem_unlock(ht->tb_semid, 0);
     //-----------------------------------------
-    return (h == ht->lines_count);
+    return missing;
 }
 bool hashtable_set(hashtable* ht, ht_rec* data)
 {
     mysem_lock(ht->tb_semid, 0);
 
-    hash_t he = hash(data->key) % ht->lines_count;
-    //-----------------------------------------
-    hash_t h = hashtable_walk(ht, data, he, false);
-    if ((h < ht->lines_count) && (!ht->lines[h].busy || (ht->lines[h].data.key == data->key))) {
+    size_t h = hashtable_find(ht, data->key);
+    bool full = (h == ht->lines_count);
+    if (!full) {
         ht->lines[h].data = *data;
         ht->lines[h].busy = true;
-    } else
-        h = ht->lines_count;
+    }
     //-----------------------------------------
     mysem_unlock(ht->tb_semid, 0);
     //-----------------------------------------
-    return (h == ht->lines_count);
+    return full;
 }
 //------------------------------------------

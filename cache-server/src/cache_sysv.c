@@ -35,7 +35,7 @@ mysem_t mysem_create(mysem_inx_t num, mysem_val_t* vals)
 }
 void mysem_lock(mysem_t sid, mysem_inx_t inx)
 {
-    struct sembuf lock = {.sem_num = inx, .sem_op = -1, .sem_flg = 0 /* IPC_NOWAIT */};
+    struct sembuf lock = {.sem_num = inx, .sem_op = -1, .sem_flg = SEM_UNDO};
     /* Try to lock the resource */
     if (0 > semop(sid, &lock, 1)) {
         perror("semop lock");
@@ -44,7 +44,7 @@ void mysem_lock(mysem_t sid, mysem_inx_t inx)
 }
 void mysem_unlock(mysem_t sid, mysem_inx_t inx)
 {
-    struct sembuf release = {.sem_num = inx, .sem_op = 1, .sem_flg = 0 /* IPC_NOWAIT */};
+    struct sembuf release = {.sem_num = inx, .sem_op = 1, .sem_flg = SEM_UNDO};
     /* Try to release (unlock) the semaphore set */
     if (0 > semop(sid, &release, 1)) {
         perror("semop release");
@@ -75,7 +75,7 @@ void myshm_remove(myshm_t mid)
 char* myshm_append(myshm_t mid)
 {
     void* shm = shmat(mid, NULL, SHM_RND);
-    if (!shm) {
+    if (shm == (void*)-1) {
         perror("shmat");
         exit(EXIT_FAILURE);
     }

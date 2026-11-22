@@ -9,12 +9,12 @@
 /* ! LINUX ARCHITECTURE !
  *
  *  v   Build with make.
- *  v   Run:  ./cache ...
- *  v   On start the server creates 4 child processes
+ *  v   Run:  ./cache-server [-p port] [-i ip] [-w workers]
+ *  v   On start the server creates worker processes (4 by default)
  *      that handle client commands.
- *  v   Passing descriptors to the child processes. (sndmsg)
- *  v   Cache data in shared memory (shm_open | schmget)
- *  v   Atomicity (semget | posix)
+ *  v   Passing descriptors to the child processes. (sendmsg)
+ *  v   Cache data in shared memory (shmget)
+ *  v   Atomicity (semget)
  *  v   Implementation of hash_table with ttl
  */
 //-----------------------------------------
@@ -42,20 +42,20 @@ struct child_worker
  * @return 0 in the child, the child's pid in the parent (exits on failure).
  */
 int child_worker_init(chw_t* chw);
-/** @brief Close the worker's end of the socketpair. */
+/** @brief Close the worker's end of the socketpair (if open) and set it to -1. */
 void child_worker_free(chw_t* chw);
 /**
  * @brief Send a message and a file descriptor to a child worker.
  * @param msg CHWMSG_TASK or CHWMSG_TERM, sent as text.
  * @param fd  Descriptor passed via SCM_RIGHTS; must not be -1.
- * @return Bytes sent, or 1 for an unknown message.
+ * @return Bytes sent, 0 or -1 on failure, or 1 for an unknown message.
  */
 int child_worker_send(chw_t* chw, chwmsg_enum msg, fd_t fd);
 /**
  * @brief Receive a message and a file descriptor from the master.
- * @param[out] msg Decoded message (left unchanged if unknown).
+ * @param[out] msg Decoded message (CHWMSG_NONE if unknown or nothing was read).
  * @param[out] fd  Received descriptor, or -1 if none came.
- * @return Bytes read, or -1 if nothing was read.
+ * @return Bytes read, or -1 on end of file (the master closed the socket).
  */
 int child_worker_recv(chw_t* chw, chwmsg_enum* msg, fd_t* fd);
 //-----------------------------------------
@@ -63,6 +63,10 @@ int child_worker_recv(chw_t* chw, chwmsg_enum* msg, fd_t* fd);
 #define SRV_IPSTRLENGTH 16U
 #define SRV_MAX_WORKERS 16U
 #define SRV_BUF_LOWMARK 128U
+
+#define SRV_DEFAULT_PORT "8080"
+#define SRV_DEFAULT_IP "0.0.0.0"
+#define SRV_DEFAULT_WORKERS "4"
 
 typedef struct server_config srv_conf;
 /** @brief Server settings, worker processes and the shared cache. */
@@ -79,7 +83,6 @@ struct server_config
     chw_t* child_workers;
     //-----------------------
     /* defines FILENAME_MAX in <stdio.h> */
-    char config_path[FILENAME_MAX];
     char server_path[FILENAME_MAX];
     //-----------------------
     struct event_base* base;
@@ -89,21 +92,41 @@ struct server_config
 extern struct server_config server_conf;
 //-----------------------------------------
 /**
- * @brief Fill the config (defaults for NULL arguments) and fork the workers.
- * @param port Port string, default 8080.
- * @param ip   IPv4 address string, default "0.0.0.0".
- * @param work Number of worker processes, default 4.
+ * @brief Validate the settings and store them in the config (no processes are started).
+ * @param port Port number 1..65535.
+ * @param ip   IPv4 address in dotted form.
+ * @param work Number of worker processes, 1..SRV_MAX_WORKERS.
+ * @return 0 on success, -1 (with a message on stderr) if a value is invalid.
+ */
+int server_config_set(srv_conf* conf, const char* port, const char* ip, const char* work);
+/**
+ * @brief Fork conf->workers worker processes.
+ *
+ * Each worker keeps only its own end of its socketpair.
  * @return 0; fatal errors exit. In a child worker conf->myself is set.
  */
-int server_config_init(srv_conf* conf, char* port, char* ip, char* work);
-/** @brief Print the server name, path, port and ip to @p stream. */
+int server_config_init(srv_conf* conf);
+/** @brief Print the server name, path, port, ip and the cache's IPC ids to @p stream. */
 void server_config_print(srv_conf* conf, FILE* stream);
-/** @brief Close the worker sockets, free the worker array and zero the config. */
+/**
+ * @brief Close the worker sockets and free the worker array.
+ *
+ * In the master the closed sockets tell the workers to exit; it then waits for them.
+ */
 void server_config_free(srv_conf* conf);
 //-----------------------------------------
+/** @brief parse_console_parameters() result: run, exit successfully, or exit with an error. */
+enum
+{
+    PARSE_ERROR = -1,
+    PARSE_RUN = 0,
+    PARSE_EXIT = 1
+};
 /**
- * @brief Parse -c/--conf (the value is not used yet) and init the config with defaults.
- * @return Result of server_config_init().
+ * @brief Parse -p/--port, -i/--ip, -w/--workers, -v/--version and -h/--help into the config.
+ *
+ * Missing options take the SRV_DEFAULT_* values.
+ * @return PARSE_RUN, PARSE_EXIT after printing the version or help, PARSE_ERROR on bad input.
  */
 int parse_console_parameters(int argc, char** argv, srv_conf* conf);
 //-----------------------------------------
@@ -126,13 +149,17 @@ struct client
     struct hash_table* ht;
 };
 //-----------------------------------------
-/** @brief Listener callback: accept a connection and pass it to a random worker. */
+/**
+ * @brief Listener callback: accept a connection and pass it to a random worker.
+ *
+ * The master closes its copy of the client socket once it is sent.
+ */
 void cache_accept_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
 /**
  * @brief Worker callback: receive a client fd from the master and start serving it.
  *
- * Stops the worker's event loop on CHWMSG_TERM.
+ * Stops the worker's event loop on CHWMSG_TERM or when the master closes the socket.
  */
 void cache_connect_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
@@ -140,5 +167,16 @@ void cache_connect_cb(evutil_socket_t fd, short ev, void* arg);
 void cache_read_cb(struct bufferevent* b_ev, void* arg);
 /** @brief Event callback: free the client on EOF or error. */
 void cache_error_cb(struct bufferevent* b_ev, short events, void* arg);
+//-----------------------------------------
+/** @brief Longest command line kept while waiting for its end of line. */
+#define CACHE_MAX_LINE 1024U
+/**
+ * @brief Run every complete command line of @p buf_in and write the replies to @p buf_out.
+ *
+ * Protocol: "get <key>" or "set <ttl> <key> <val>" (integers), one per line.
+ * Reply: "ok <key> <val>" or "error : <text>". An incomplete last line stays in @p buf_in
+ * (dropped with an error if it grows longer than CACHE_MAX_LINE).
+ */
+void cache_handling(hashtable* ht, struct evbuffer* buf_in, struct evbuffer* buf_out);
 //-----------------------------------------
 #endif // _CACHE_H_

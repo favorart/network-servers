@@ -142,15 +142,18 @@ int child_worker_init(struct child_worker* chw)
 }
 void child_worker_free(struct child_worker* chw)
 {
-    close(chw->fd);
+    if (chw->fd >= 0)
+        close(chw->fd);
+    chw->fd = -1;
 }
 /* Pass a fd from a parent to a child */
 int child_worker_recv(struct child_worker* chw, chwmsg_enum* msg, fd_t* fd)
 {
     char msg_char[CHWMSG_MAXLEN] = {0};
     //-----------------------
-    /* Reading without accepting a file descriptor */
-    ssize_t size = sock_fd_read(chw->fd, msg_char, sizeof(msg_char), fd);
+    *msg = CHWMSG_NONE;
+    /* Keep the last byte for the terminating NUL */
+    ssize_t size = sock_fd_read(chw->fd, msg_char, sizeof(msg_char) - 1U, fd);
     if (size <= 0)
         return -1;
 
