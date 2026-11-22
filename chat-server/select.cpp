@@ -73,7 +73,7 @@ int main (int argc, char **argv)
     {
       while ( true )
       {
-        int  recvSize = recv (sendSocket, buffer, MAX_BUFFER, MSG_NOSIGNAL);
+        int  recvSize = recv (sendSocket, buffer, BUFSIZE, MSG_NOSIGNAL);
         if ( recvSize <= 0 )
         {
           break;
@@ -85,7 +85,7 @@ int main (int argc, char **argv)
 
     if ( FD_ISSET (STDIN_FILENO, &readset) )
     {
-      fgets (buffer, MAX_BUFFER, stdin);
+      fgets (buffer, BUFSIZE, stdin);
       int len = strlen (buffer);
       std::cout << "\x1b[1A\x1b[2K";
       send (sendSocket, buffer, len, MSG_NOSIGNAL);

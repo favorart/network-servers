@@ -1,0 +1,119 @@
+name: CI
+
+# Documentation-only changes do not run CI (such a PR is merged with --admin).
+on:
+  push:
+    branches: [ "main" ]
+    paths-ignore: [ "**.md", "docs/**" ]
+  pull_request:
+    branches: [ "**" ]
+    paths-ignore: [ "**.md", "docs/**" ]
+
+permissions:
+  contents: read
+
+# A new push to a PR cancels its previous run; main runs always finish (they tag).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# A push to main is released: the gcc build job packs the binaries it built,
+# the release job only collects the archive.
+env:
+  RELEASE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+jobs:
+  # The servers use epoll, SysV IPC and /proc: Linux only.
+  linux:
+    name: linux (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - cc: gcc
+          cxx: g++
+        - cc: clang
+          cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: ${{ env.RELEASE == 'true' && '0' || '1' }} # tags, for the version
+    - name: version
+      if: env.RELEASE == 'true'
+      run: echo "VERSION=$(bash .github/next-tag.sh | sed 's/^v//')" >> "$GITHUB_ENV"
+    - name: install libevent
+      # the runner's package index is usually fresh enough; update only if it is not
+      run: |
+        PKGS="libevent-dev"
+        sudo apt-get install -y --no-install-recommends $PKGS ||
+          { sudo apt-get update && sudo apt-get install -y --no-install-recommends $PKGS; }
+    - name: build
+      run: make -j all
+    - name: pack
+      if: env.RELEASE == 'true' && matrix.cc == 'gcc'
+      run: make dist
+    - uses: actions/upload-artifact@v7
+      if: env.RELEASE == 'true' && matrix.cc == 'gcc'
+      with:
+        name: network-servers-linux
+        path: network-servers-*.tar.gz
+        if-no-files-found: error
+        retention-days: 1
+
+  # Tag the main commit with the next patch version: v0.0.1, v0.0.2, ...
+  # A minor or major bump is a tag pushed by hand; the numbering continues from it.
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ linux ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      new_tag: ${{ steps.tag.outputs.new_tag }}
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+    - id: tag
+      run: |
+        if git tag --points-at HEAD | grep -q '^v[0-9]'; then
+          echo "HEAD is already tagged"; exit 0
+        fi
+        tag=$(bash .github/next-tag.sh) # the version the build jobs packed
+        git tag "$tag"
+        git push origin "$tag"
+        echo "new_tag=$tag" >> "$GITHUB_OUTPUT"
+
+  # GitHub Release for the new tag with the archive packed by the build job.
+  # Only the 3 latest releases are kept (their tags stay).
+  release:
+    needs: tag
+    if: needs.tag.outputs.new_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.tag.outputs.new_tag }}
+    steps:
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: network-servers-*
+        merge-multiple: true
+    - name: publish
+      run: gh release create "$TAG" network-servers-*.tar.gz --title "$TAG" --generate-notes
+    - name: keep the 3 latest releases
+      run: |
+        gh release list --limit 100 --json tagName,createdAt \
+          --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName' |
+        while read -r old; do
+          gh release delete "$old" --yes
+        done

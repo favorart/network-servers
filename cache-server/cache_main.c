@@ -5,11 +5,12 @@
 
 
 //-----------------------------------------
+struct server_config  server_conf = { 0 };
+
 int main (int argc, char **argv)
 {
   int result = 0;
 
-  struct server_config  server_conf = { 0 };
   //-------------------------------------------
   /* Master Process */
   server_conf.ht = malloc (sizeof (struct hash_table));

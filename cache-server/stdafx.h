@@ -10,6 +10,7 @@
 #include <sys/sem.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
