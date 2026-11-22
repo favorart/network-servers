@@ -1,4 +1,4 @@
-# Builds every server (Linux only): make [all|clean|dist]
+# Builds every server (Linux only): make [all|clean|dist|format|format-check]
 SERVERS := cache-server chat-server dictionary-server http-server proxy-server subscribe-server
 
 # Version from the latest tag (0.0.5, 0.0.5-3-gabc1234); CI passes the next tag.
@@ -23,4 +23,13 @@ dist: all
 	tar -czf $(DIST).tar.gz $(DIST)
 	rm -r $(DIST)
 
-.PHONY: all clean dist
+# Formatting: clang-format 18 (CI pins 18.1.8: pipx install clang-format==18.1.8)
+CLANG_FORMAT ?= clang-format
+FORMAT_SRCS := $(shell git ls-files '*.c' '*.h' '*.cpp')
+format:
+	$(CLANG_FORMAT) -i $(FORMAT_SRCS)
+
+format-check:
+	$(CLANG_FORMAT) --dry-run -Werror $(FORMAT_SRCS)
+
+.PHONY: all clean dist format format-check

@@ -1,8 +1,8 @@
-﻿#ifndef _STDAFX_H_
+#ifndef _STDAFX_H_
 #define _STDAFX_H_
 
 #define _XOPEN_SOURCE
-#define  WAIT_ANY (-1)
+#define WAIT_ANY (-1)
 //-----------------------------------------
 #include <sys/types.h>
 
@@ -39,12 +39,14 @@
 #include <vector>
 #include <algorithm>
 //-----------------------------------------
-#define SWAP(X,Y) \
-    do { unsigned char _buf[sizeof (*(X))]; \
-         memmove(_buf, (X), sizeof (_buf)); \
-         memmove((X),  (Y), sizeof (_buf)); \
-         memmove((Y), _buf, sizeof (_buf)); \
-       } while (0)
+/** @brief Swap two objects of the same type byte by byte. */
+#define SWAP(X, Y)                                                                                 \
+    do {                                                                                           \
+        unsigned char _buf[sizeof(*(X))];                                                          \
+        memmove(_buf, (X), sizeof(_buf));                                                          \
+        memmove((X), (Y), sizeof(_buf));                                                           \
+        memmove((Y), _buf, sizeof(_buf));                                                          \
+    } while (0)
 //-----------------------------------------
 #define IN
 #define OUT
