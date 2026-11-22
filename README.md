@@ -27,6 +27,7 @@ make            # every server into <server>/build/
 make test       # unit and integration tests
 make test SAN=1 # the same under ASan + UBSan, in <server>/build-san/
 make dist       # network-servers-<version>-linux-<arch>.tar.gz with all binaries
+make bench      # throughput and latency of every server, one Markdown table
 ```
 
 Each server folder has its own `Makefile` with the same targets. Every binary prints its version with `-v`/`--version`; the version comes from the git tag. Releases with the prebuilt binaries are on the [Releases](https://github.com/favorart/network-servers/releases) page.
