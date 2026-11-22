@@ -184,7 +184,7 @@ static void test_choose_server(void** state)
     int hits[3] = {0};
     for (int i = 0; i < 300; ++i) {
         int id = proxy_choose_server(&f->conf);
-        assert_in_range(id, 0, 2);
+        assert_true(id >= 0 && id <= 2); // assert_in_range is deprecated in cmocka 2
         ++hits[id];
     }
     for (int i = 0; i < 3; ++i)
