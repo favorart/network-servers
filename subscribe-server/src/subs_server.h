@@ -30,6 +30,7 @@
 #define SRV_SERVER_NAME "subscribe-server"
 #define SRV_IPSTRLENGTH 16U
 #define SRV_MAX_NQUEUES 255U
+#define SRV_MAX_LINE 4096U
 
 typedef uint8_t wc_t;
 typedef struct server_config srv_conf;
@@ -68,8 +69,10 @@ struct server_config
 };
 //-----------------------------------------
 /**
- * @brief Fill the configuration from option strings (NULL means default) and create the
- *        queues manager.
+ * @brief Fill the configuration from option strings and create the queues manager.
+ *
+ * NULL or invalid values mean defaults: port 3131 (valid 0..65535), ip 0.0.0.0,
+ * 2 queues (valid 1..SRV_MAX_NQUEUES).
  * @return 0 on success, non-zero on failure.
  */
 int server_config_init(srv_conf* conf, char* ip, char* port, char* queues);
@@ -101,8 +104,13 @@ void subs_ac_err_cb(evutil_socket_t fd, short ev, void* arg);
 void subs_read_cb(struct bufferevent* b_ev, void* arg);
 /** @brief Client event callback: on EOF or error remove and free the client. */
 void subs_error_cb(struct bufferevent* b_ev, short events, void* arg);
+/** @brief Free every connected client (call before freeing the event base). */
+void subs_clients_free(struct server_config* conf);
 /**
  * @brief Execute every complete command line in @p buf_in and write the replies to @p buf_out.
+ *
+ * An incomplete last line stays in @p buf_in until the rest arrives, unless it grows longer
+ * than SRV_MAX_LINE bytes; then it is dropped.
  *
  * Protocol: `publish <num> message` or `subscribe <num>`; replies `ok <que num>` or
  * `error : text`.

@@ -47,13 +47,26 @@ int set_nonblock(evutil_socket_t fd)
     return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 //-----------------------------------------
+/**
+ * @brief Parse a whole decimal number in [@p min, @p max].
+ * @return The number, or @p fallback if @p str is NULL, not a number or out of range.
+ */
+static long parse_number(const char* str, long min, long max, long fallback)
+{
+    if (!str || !*str)
+        return fallback;
+    char* end = NULL;
+    errno = 0;
+    long value = strtol(str, &end, 10);
+    if (errno || *end || value < min || value > max)
+        return fallback;
+    return value;
+}
+
 int server_config_init(srv_conf* conf, char* ip, char* port, char* queues)
 {
     //-----------------------
-    const uint16_t max_port = 65535U;
-    if (!port || (conf->port = atoi(port)) > max_port) {
-        conf->port = 3131;
-    }
+    conf->port = (uint16_t)parse_number(port, 0, 65535, 3131);
     //-----------------------
     if (ip && strlen(ip) < SRV_IPSTRLENGTH) {
         strcpy(conf->ip, ip);
@@ -70,12 +83,7 @@ int server_config_init(srv_conf* conf, char* ip, char* port, char* queues)
     } else
         conf->server_path[bytes] = '\0';
     //-----------------------
-    if (queues) {
-        conf->n_queues = atoi(queues);
-    } else {
-        conf->n_queues = 2U;
-    }
-
+    conf->n_queues = (wc_t)parse_number(queues, 1, SRV_MAX_NQUEUES, 2);
     conf->queues_manager = new QueuesManager(conf->n_queues);
     //-----------------------
     return 0;

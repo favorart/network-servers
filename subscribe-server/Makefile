@@ -30,7 +30,19 @@ $(BUILD)/obj/%.o: src/%.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-test: all
+$(BUILD)/tests/%.o: tests/%.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(CPPFLAGS) -Isrc $(CXXFLAGS) -c $< -o $@
+
+$(BUILD)/unit_tests: $(BUILD)/tests/test_unit.o $(LIB_OBJS)
+	$(CXX) $(LDFLAGS) $^ -o $@ -lgtest -lgtest_main -pthread $(LDLIBS)
+
+$(BUILD)/integration_test: $(BUILD)/tests/test_integration.o
+	$(CXX) $(LDFLAGS) $^ -o $@ -lgtest -lgtest_main -pthread
+
+test: $(BUILD)/$(BIN) $(BUILD)/unit_tests $(BUILD)/integration_test
+	$(RUN) $(BUILD)/unit_tests
+	SUBS_SERVER_BIN=$(CURDIR)/$(BUILD)/$(BIN) $(RUN) $(BUILD)/integration_test
 
 clean:
 	rm -rf build build-san
@@ -38,6 +50,6 @@ clean:
 print-bin:
 	@echo $(BUILD)/$(BIN)
 
--include $(wildcard $(BUILD)/obj/*.d)
+-include $(wildcard $(BUILD)/obj/*.d $(BUILD)/tests/*.d)
 
 .PHONY: all test clean print-bin

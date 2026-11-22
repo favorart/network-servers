@@ -98,16 +98,23 @@ int main(int argc, char** argv)
 
         /* Dispatch events */
         event_base_loop(server_conf.base, 0);
+        event_del(&ev);
     }
     //-------------------------------------------
 
 MARK_FREE:
     //-------------------------------------------
-    event_base_free(server_conf.base);
-    event_free(sigint_event);
+    /* Free the clients and events while their event base still exists */
+    subs_clients_free(&server_conf);
+    if (sigint_event)
+        event_free(sigint_event);
+    if (server_conf.base)
+        event_base_free(server_conf.base);
 
-    shutdown(MasterSocket, SHUT_RDWR);
-    close(MasterSocket);
+    if (MasterSocket != -1) {
+        shutdown(MasterSocket, SHUT_RDWR);
+        close(MasterSocket);
+    }
 
     server_config_free(&server_conf);
     //-------------------------------------------
