@@ -39,7 +39,21 @@ $(SERVER): $(BUILD)/main.o $(LIB_OBJS)
 $(CLIENT): $(BUILD)/chat_client.o
 	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
-test: all
+TESTS := $(BUILD)/test_chat $(BUILD)/test_server
+
+$(BUILD)/test_%.o: tests/test_%.c | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/test_chat: $(BUILD)/test_chat.o $(LIB_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -lcmocka
+
+$(BUILD)/test_server: $(BUILD)/test_server.o
+	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS) -lcmocka
+
+# The integration test starts the server binary named by CHAT_SERVER.
+test: all $(TESTS)
+	$(RUN) $(BUILD)/test_chat
+	CHAT_SERVER=$(SERVER) $(RUN) $(BUILD)/test_server
 
 clean:
 	rm -rf build build-san

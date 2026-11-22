@@ -122,8 +122,18 @@ int main(int argc, char** argv)
         if (FD_ISSET(sendSocket, &readset)) {
             while (true) {
                 ssize_t recvSize = recv(sendSocket, buffer, BUFSIZE, MSG_NOSIGNAL);
-                if (recvSize <= 0) {
-                    break;
+                if (recvSize == 0) {
+                    std::cout << "Server closed the connection" << std::endl;
+                    close(sendSocket);
+                    return 0;
+                }
+                if (recvSize < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+                        break;
+                    }
+                    std::cout << strerror(errno) << std::endl;
+                    close(sendSocket);
+                    return 1;
                 }
                 buffer[recvSize] = 0;
                 std::cout << "Message from server: " << buffer;
