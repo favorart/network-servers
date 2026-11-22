@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -15,6 +16,9 @@ int main(int argc, char** argv)
     int result = 0;
     int MasterSocket = -1;
     struct event_base* base = NULL;
+
+    /* A write to a closed peer must fail with EPIPE, not kill the proxy */
+    signal(SIGPIPE, SIG_IGN);
 
     /* Read the server configuration from the command line parameters */
     int parsed = parse_console_parameters(argc, argv, &server_conf);

@@ -58,8 +58,10 @@ extern struct server_config server_conf;
 //-----------------------------------------
 /**
  * @brief Read the config file "<port>,<ip:port>,<ip:port>,...".
+ *
+ * Ports must be 1..65535, addresses dotted IPv4; parsing stops at the first bad remote server.
  * @param path Config file; falls back to SRV_CONFDEFNAME if missing.
- * @return Non-zero on failure (the config is freed then).
+ * @return Non-zero on failure, including no valid remote servers (the config is freed then).
  */
 int server_config_init(srv_conf* conf, char* path);
 /** @brief Print the config to @p stream. */
@@ -81,6 +83,12 @@ int parse_console_parameters(int argc, char** argv, srv_conf* conf);
  */
 int set_nonblock(evutil_socket_t fd);
 //-----------------------------------------
+/**
+ * @brief Pick a random remote server.
+ * @return Index into conf->remote_servers, or -1 if the list is empty.
+ */
+int proxy_choose_server(const srv_conf* conf);
+//-----------------------------------------
 /** @brief A proxied pair: the client connection and its remote server connection. */
 struct client
 {
@@ -92,6 +100,7 @@ struct client
     //---------------------------
     struct bufferevent* server;
     //---------------------------
+    /** Number of sides that sent EOF; the pair is freed at 2 with both outputs flushed. */
     int flag_close;
 };
 //-----------------------------------------
@@ -102,7 +111,12 @@ void proxy_ac_err_cb(evutil_socket_t fd, short ev, void* arg);
 //-----------------------------------------
 /** @brief Move all input of one side to the output of the other side. */
 void proxy_read_cb(struct bufferevent* b_ev, void* arg);
-/** @brief Handle connect, EOF (half-close; free after both sides) and errors (free both). */
+/**
+ * @brief Handle connect, EOF and errors.
+ *
+ * EOF from one side is passed on as a half-close (shutdown SHUT_WR) of the other side after its
+ * output is flushed; the pair is freed after both sides sent EOF. An error frees both sides.
+ */
 void proxy_error_cb(struct bufferevent* b_ev, short events, void* arg);
 //-----------------------------------------
 #endif // _PROXY_H_

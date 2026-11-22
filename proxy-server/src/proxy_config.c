@@ -61,7 +61,7 @@ int server_config_init(srv_conf* conf, char* path)
     FILE* f_conf = NULL;
     char* fileline = NULL;
     //-----------------------
-    srand((unsigned int)clock());
+    srand((unsigned int)time(NULL) ^ ((unsigned int)getpid() << 16));
     //-----------------------
     conf->ptr_server_name = SRV_SERVER_NAME;
     //-----------------------
@@ -69,7 +69,7 @@ int server_config_init(srv_conf* conf, char* path)
     //-----------------------
     size_t filesize = 0;
     struct stat sb;
-    if (path && stat(path, &sb) == 0) {
+    if (path && strlen(path) < sizeof(conf->config_path) && stat(path, &sb) == 0) {
         strcpy(conf->config_path, path);
         filesize = sb.st_size;
     } else {
@@ -129,18 +129,20 @@ int server_config_init(srv_conf* conf, char* path)
 
     str = fileline;
     int str_offset = 0;
-    const uint16_t max_port = 65535U;
-    if (1 != sscanf(fileline, "%hu,%n", &conf->port, &str_offset) || conf->port >= max_port) {
+    const unsigned max_port = 65535U;
+    unsigned port = 0U;
+    if (1 != sscanf(fileline, "%u,%n", &port, &str_offset) || !port || port > max_port) {
         my_errno = SRV_ERR_FCONF;
         fprintf(stderr, "%s\n", strmyerror());
-        conf->port = 8080;
+        port = 8080;
     }
+    conf->port = (uint16_t)port;
     str += str_offset;
     //-----------------------
     for (size_t i = 0U; i < count; ++i) {
-        uint16_t ip1, ip2, ip3, ip4;
-        if (5 != sscanf(str, "%hu.%hu.%hu.%hu:%hu,%n", &ip1, &ip2, &ip3, &ip4,
-                        &conf->remote_servers[i].port, &str_offset)) {
+        unsigned ip1, ip2, ip3, ip4;
+        if (5 != sscanf(str, "%u.%u.%u.%u:%u,%n", &ip1, &ip2, &ip3, &ip4, &port, &str_offset) ||
+            ip1 > 255U || ip2 > 255U || ip3 > 255U || ip4 > 255U || !port || port > max_port) {
             my_errno = SRV_ERR_FCONF;
             fprintf(stderr, "%s\n", strmyerror());
 
@@ -148,13 +150,23 @@ int server_config_init(srv_conf* conf, char* path)
             break;
         }
 
-        sprintf(conf->remote_servers[i].ip, "%hu.%hu.%hu.%hu", ip1, ip2, ip3, ip4);
+        conf->remote_servers[i].port = (uint16_t)port;
+        snprintf(conf->remote_servers[i].ip, sizeof(conf->remote_servers[i].ip), "%u.%u.%u.%u", ip1,
+                 ip2, ip3, ip4);
         str += str_offset;
+    }
+    //-----------------------
+    if (!conf->remote_servers_count) {
+        my_errno = SRV_ERR_FCONF;
+        fprintf(stderr, "No remote servers: %s\n", strmyerror());
+        fail = true;
     }
 
     //-----------------------
 CONF_FREE:;
-    fclose(f_conf);
+    free(fileline);
+    if (f_conf)
+        fclose(f_conf);
     if (fail)
         server_config_free(conf);
     //-----------------------
@@ -163,9 +175,13 @@ CONF_FREE:;
 void server_config_print(srv_conf* conf, FILE* stream)
 {
     fprintf(stream,
-            ">>> http server config:\n\n\tname: '%s'   server path: '%s'\n"
-            "\tconf: '%s'\n\tport: %u   ip: '%s'\n\n",
+            ">>> proxy server config:\n\n\tname: '%s'   server path: '%s'\n"
+            "\tconf: '%s'\n\tport: %u   ip: '%s'\n",
             conf->ptr_server_name, conf->server_path, conf->config_path, conf->port, conf->ip);
+    for (uint16_t i = 0U; i < conf->remote_servers_count; ++i)
+        fprintf(stream, "\tremote: %s:%u\n", conf->remote_servers[i].ip,
+                conf->remote_servers[i].port);
+    fprintf(stream, "\n");
 }
 void server_config_free(srv_conf* conf)
 {
@@ -197,7 +213,7 @@ int parse_console_parameters(int argc, char** argv, srv_conf* conf)
 
         case '?':
             /* getopt_long already printed an error message. */
-            printf("using:\n./wwwd -c|--conf <conf>\n\n");
+            printf("using:\n./proxy-server -c|--conf <conf> | -v|--version\n\n");
             break;
 
         default:
