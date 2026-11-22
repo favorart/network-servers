@@ -264,8 +264,11 @@ static void test_clean_shutdown(void** state)
     assert_non_null(ids);
     int shmid = -1, semid = -1;
     assert_int_equal(sscanf(ids, "shm: %d sem: %d", &shmid, &semid), 2);
+    /* The segment is gone, or marked for removal while a short-lived process (for example a
+     * sanitizer helper forked from the master) is still attached: IPC_RMID was done either way. */
     struct shmid_ds ds;
-    assert_int_equal(shmctl(shmid, IPC_STAT, &ds), -1);
+    if (shmctl(shmid, IPC_STAT, &ds) == 0)
+        assert_true(ds.shm_perm.mode & SHM_DEST);
     assert_int_equal(semctl(semid, 0, GETVAL), -1);
 }
 
