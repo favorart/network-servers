@@ -1,8 +1,10 @@
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
@@ -16,6 +18,7 @@ void server_job_function(job_t* job)
 {
     struct client* Client = (struct client*)job->user_data;
     //----------------------------------------------------------------------
+    /* Runs until the client's bufferevent is disabled (EOF or error) and its output is sent. */
     event_base_loop(Client->base, 0);
     client_free(Client);
     free(job);
@@ -23,8 +26,12 @@ void server_job_function(job_t* job)
 //-----------------------------------------
 void client_free(struct client* Client)
 {
-    bufferevent_free(Client->b_ev);
-    event_base_free(Client->base);
+    if (!Client)
+        return;
+    if (Client->b_ev)
+        bufferevent_free(Client->b_ev);
+    if (Client->base)
+        event_base_free(Client->base);
     free(Client);
 }
 //-----------------------------------------
@@ -59,6 +66,7 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
     struct client* Client = (struct client*)calloc(1U, sizeof(*Client));
     if (!Client) {
         perror("client calloc");
+        close(SlaveSocket);
         return;
     }
 
@@ -66,6 +74,7 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
         my_errno = SRV_ERR_LIBEV;
         fprintf(stderr, "%s\n", strmyerror());
 
+        close(SlaveSocket);
         client_free(Client);
         return;
     }
@@ -78,6 +87,7 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
         my_errno = SRV_ERR_LIBEV;
         fprintf(stderr, "%s\n", strmyerror());
 
+        close(SlaveSocket);
         client_free(Client);
         return;
     }
@@ -105,38 +115,34 @@ void srv_accept_cb(evutil_socket_t fd, short ev, void* arg)
 #ifdef _DEBUG
     printf("connection accepted\n");
 #endif // _DEBUG
-       //----------------------------------------------------------------------
 }
 //-----------------------------------------
 void srv_error_cb(struct bufferevent* b_ev, short events, void* arg)
 {
-    (void)b_ev;
-    struct client* Client = (struct client*)arg;
+    (void)arg;
     //----------------------------------------------------------------------
 #ifdef _DEBUG
     if (events & BEV_EVENT_CONNECTED) {
         printf("connection established\n");
         return;
     }
-#endif // _DEBUG
     if (events & BEV_EVENT_EOF) {
-#ifdef _DEBUG
-        printf("got a close. length = %zu\n",
-               evbuffer_get_length(bufferevent_get_input(Client->b_ev)));
-#endif // _DEBUG
-        shutdown(bufferevent_getfd(Client->b_ev), SHUT_RDWR);
+        printf("got a close. length = %zu\n", evbuffer_get_length(bufferevent_get_input(b_ev)));
     }
+#endif // _DEBUG
     //----------------------------------------------------------------------
     if (events & BEV_EVENT_ERROR) {
         fprintf(stderr, "Error from bufferevent: '%s'\n",
                 evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+        bufferevent_disable(b_ev, EV_READ | EV_WRITE);
+    } else {
+        /* EOF: stop reading; the loop ends once the pending output is written. */
+        bufferevent_disable(b_ev, EV_READ);
     }
     //----------------------------------------------------------------------
-    // client_free (Client);
 #ifdef _DEBUG
-    printf("connection closed");
+    printf("connection closed\n");
 #endif // _DEBUG
-       //----------------------------------------------------------------------
 }
 void srv_read_cb(struct bufferevent* b_ev, void* arg)
 {
@@ -150,7 +156,6 @@ void srv_read_cb(struct bufferevent* b_ev, void* arg)
     struct evbuffer* buf_in = bufferevent_get_input(b_ev);
     struct evbuffer* buf_out = bufferevent_get_output(b_ev);
 
-    /* Copy all the data from the input buffer to the output buffer. */
     find_words_prefix(buf_in, buf_out, Client->ht, Client->dict_path);
     //----------------------------------------------------------------------
 #ifdef _DEBUG
@@ -158,13 +163,52 @@ void srv_read_cb(struct bufferevent* b_ev, void* arg)
 #endif // _DEBUG
 }
 //-----------------------------------------
+void dict_rec_add(struct dict_rec* rec, const char* word, int weight)
+{
+    /* Position after all words with a weight >= this one: equal weights keep file order. */
+    int pos = 0;
+    while (pos < rec->count && rec->weights[pos] >= weight)
+        ++pos;
+    if (pos >= DICT_WORD_CNT)
+        return;
+
+    /* Shift the lighter words down; the last one falls out when the record is full. */
+    int last = (rec->count < DICT_WORD_CNT) ? rec->count : DICT_WORD_CNT - 1;
+    memmove(rec->words[pos + 1], rec->words[pos], (size_t)(last - pos) * DICT_WORD_LEN);
+    memmove(&rec->weights[pos + 1], &rec->weights[pos], (size_t)(last - pos) * sizeof(int));
+
+    snprintf(rec->words[pos], DICT_WORD_LEN, "%s", word);
+    rec->weights[pos] = weight;
+    if (rec->count < DICT_WORD_CNT)
+        ++rec->count;
+}
+void dict_lookup(FILE* fdict, const char* prefix, size_t prefix_length, struct dict_rec* rec)
+{
+    char* line = NULL;
+    size_t line_size = 0U;
+    char word[DICT_WORD_LEN];
+    int weight = 0, word_end = 0;
+
+    memset(rec, 0, sizeof(*rec));
+    rewind(fdict);
+    while (getline(&line, &line_size, fdict) != -1) {
+        /* "%100s" matches DICT_WORD_LEN; longer words and broken lines are skipped. */
+        if (2 != sscanf(line, " %100s%n %d", word, &word_end, &weight))
+            continue;
+        if (!isspace((unsigned char)line[word_end]))
+            continue;
+        if (!strncmp(word, prefix, prefix_length))
+            dict_rec_add(rec, word, weight);
+    }
+    free(line);
+}
+//-----------------------------------------
 void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struct hash_table* ht,
                        const char* dict_path)
 {
     char* prefix = NULL;
     size_t prefix_length = 0U;
-    //-----------------------------------------------------------------
-    ht_rec rec = {0};
+    ht_rec rec;
     //-----------------------------------------------------------------
     FILE* fdict = fopen(dict_path, "r");
     if (!fdict) {
@@ -173,42 +217,25 @@ void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struc
     }
 
     while ((prefix = evbuffer_readln(buf_inc, &prefix_length, EVBUFFER_EOL_ANY))) {
-        char word[DICT_WORD_LEN];
-        int weight = 0;
-
 #ifdef _DEBUG
         printf("\n\n--> %s\n", prefix);
 #endif // _DEBUG
        //-----------------------------------------------------------------
+        if (prefix_length >= DICT_WORD_LEN) {
+            my_errno = SRV_ERR_RCMMN;
+            fprintf(stderr, "prefix longer than %d bytes%s\n", DICT_WORD_LEN - 1, strmyerror());
+            free(prefix);
+            continue;
+        }
+        /* Each prefix starts from an empty record. */
+        memset(&rec, 0, sizeof(rec));
         strcpy(rec.key.word, prefix);
         //-----------------------------------------------------------------
         if (hashtable_get(ht, &rec)) {
-            // printf ("non hash\n");
-            //----------------------------------------------------------------------
-            while (2 == fscanf(fdict, "%s %d", word, &weight)) {
-                // #ifdef  _DEBUG
-                //       printf ("%s %d\n", word, weight);
-                // #endif // _DEBUG
-
-                if (!strncmp(word, prefix, prefix_length)) {
-                    /* sorted_by weight */
-                    if (rec.val.count >= DICT_WORD_CNT) {
-                        for (int j = 0; j < DICT_WORD_CNT; ++j) {
-                            if (weight > rec.val.weights[j]) {
-                                strcpy(rec.val.words[j], word);
-                                rec.val.weights[j] = weight;
-                                break;
-                            }
-                        }
-                    } else {
-                        strcpy(rec.val.words[rec.val.count], word);
-                        rec.val.weights[rec.val.count] = weight;
-                        ++rec.val.count;
-                    } // else
-                }
-            }
-            //-----------------------------------------------------------------
+            dict_lookup(fdict, prefix, prefix_length, &rec.val);
         }
+        rec.ttl = ttl_converted(10);
+        hashtable_set(ht, &rec);
 
         if (buf_out) {
             for (int j = 0; j < rec.val.count; ++j) {
@@ -219,18 +246,14 @@ void find_words_prefix(struct evbuffer* buf_inc, struct evbuffer* buf_out, struc
             }
         }
         //-----------------------------------------------------------------
-        rec.ttl = ttl_converted(10);
-        hashtable_set(ht, &rec);
-        //-----------------------------------------------------------------
         free(prefix);
     }
     //-----------------------------------------------------------------
 HNDL_FREE:;
-    free(prefix);
     if (fdict)
         fclose(fdict);
 
-    evbuffer_drain(buf_inc, -1);
+    evbuffer_drain(buf_inc, evbuffer_get_length(buf_inc));
     //----------------------------------------------------------------------
 }
 //-----------------------------------------

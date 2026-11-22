@@ -23,148 +23,100 @@ void hashtable_init(hashtable* ht, size_t lines_count, size_t size,
     //------------------------------------------
     ht->lines_count = lines_count;
     if (sizeof(ht_line) * lines_count > size) {
-        my_errno = SRV_ERR_PARAM;
-        fprintf(stderr, "ht size%s", strmyerror());
+        if (size) {
+            my_errno = SRV_ERR_PARAM;
+            fprintf(stderr, "ht size%s\n", strmyerror());
+        }
         ht->shm_size = lines_count * sizeof(ht_line);
     } else {
         ht->shm_size = size;
     }
     //-----------------------------------------
-    ht->shmemory = malloc(ht->shm_size);
+    ht->shmemory = calloc(1U, ht->shm_size);
     if (!ht->shmemory) {
         perror("ht shmemory");
         exit(EXIT_FAILURE);
     }
-    /* Initialize the shared memory */
-    memset(ht->shmemory, 0, ht->shm_size);
-
     ht->lines = (ht_line*)ht->shmemory;
     //-----------------------------------------
-    pthread_mutex_t blank_mutex = PTHREAD_MUTEX_INITIALIZER;
-    memcpy(&ht->mutex, &blank_mutex, sizeof(ht->mutex));
-    //-----------------------------------------
+    pthread_mutex_init(&ht->mutex, NULL);
     ht->key_comp = key_comp;
-
-    return;
 }
 void hashtable_free(hashtable* ht)
 {
+    if (!ht)
+        return;
     free(ht->shmemory);
+    ht->shmemory = NULL;
+    ht->lines = NULL;
+    pthread_mutex_destroy(&ht->mutex);
 }
 //-----------------------------------------
-static hash_t hash(ht_key_t key)
+hash_t ht_hash(const ht_key_t* key)
 {
-    char* k = (char*)&key;
     uint32_t h = 2139062143U;
 
-    for (size_t i = 0; i < sizeof(key); ++i)
-        h = h * 37 + k[i];
+    /* Only the string: the bytes after its NUL are garbage. */
+    for (const char* k = key->word; *k && k < key->word + sizeof(key->word); ++k)
+        h = h * 37 + (unsigned char)*k;
 
     return (hash_t)h;
 }
-static hash_t hashtable_walk(hashtable* ht, ht_rec* data, bool isget)
+/**
+ * @brief Linear probing (with wrap-around) for data->key; call with the mutex held.
+ * @param[out] slot Slot of the key (live or expired), else the first expired slot met,
+ *                  else the free slot that ended the probe; lines_count if the table is full.
+ * @return true if the key itself is at @p slot.
+ */
+static bool hashtable_walk(hashtable* ht, ht_rec* data, size_t* slot)
 {
-    hash_t he = hash(data->key) % ht->lines_count;
-    hash_t h = he, h_ret = h;
-    //-----------------------------------------
-    /* walk along the open addressing */
-    while ((h < ht->lines_count) && ht->lines[h].busy) {
-        hash_t hn = hash(ht->lines[h + 1U].data.key) % ht->lines_count;
-        /* if we meet an expired ttl */
-        if (ttl_completed(ht->lines[h].data.ttl)) {
-            /* if there is nothing ahead in the open addressing */
-            if (((h + 1U) >= ht->lines_count) || !ht->lines[h + 1U].busy ||
-                ((h + 1U) == hn)
-                /* or the hash of the next element is greater than the hash of the current one */
-                || ((he < hn) && !isget)) {
-                ht->lines[h].busy = false;
-                h_ret = h;
-                break;
-            } /* found the required index - finish */
+    size_t n = ht->lines_count;
+    size_t h = ht_hash(&data->key) % n;
+    size_t expired = n;
 
-            hash_t hc = ++h;
-            /* while in the open addressing: the index of the next element is greater than its hash
-             */
-            while ((h < ht->lines_count) && ht->lines[h].busy && (h > hn)) {
-                hn = hash(ht->lines[++h].data.key) % ht->lines_count;
-            }
-
-            /* shift the next one into this place */
-            memmove(&ht->lines[hc - 1U], &ht->lines[hc], (h - hc) * sizeof(ht_line));
-
-            ht->lines[h - 1U].busy = false;
-            h = hc;
-        } else if (!ht->key_comp(&ht->lines[h].data.key, &data->key)) {
-            h_ret = h;
-            break;
-        } else if (he < h) {
-            /* move the records apart */
-            hash_t hc = h;
-            while ((h < ht->lines_count) && ht->lines[h].busy) {
-                if (ttl_completed(ht->lines[h].data.ttl)) {
-                    ht->lines[h].busy = false;
-                    break;
-                }
-                ++h;
-            }
-
-            if (h >= ht->lines_count) {
-                break;
-            }
-
-            /* moving the records apart */
-            memmove(&ht->lines[hc + 1U], &ht->lines[hc], (h - hc) * sizeof(ht_line));
-            ht->lines[hc].busy = false;
-
-            h_ret = hc;
-            break;
+    for (size_t i = 0; i < n; ++i, h = (h + 1U) % n) {
+        ht_line* line = &ht->lines[h];
+        if (!line->busy) {
+            *slot = (expired < n) ? expired : h;
+            return false;
         }
-
-        ++h;
-        h_ret = h;
-    } // end while
-    //-----------------------------------------
-    return h_ret;
+        if (!ht->key_comp(&line->data.key, &data->key)) {
+            *slot = h;
+            return true;
+        }
+        if (expired == n && ttl_completed(line->data.ttl))
+            expired = h;
+    }
+    *slot = expired;
+    return false;
 }
 //-----------------------------------------
 bool hashtable_get(hashtable* ht, ht_rec* data)
 {
-#ifdef _LOCK
+    bool miss = true;
+    size_t h;
+
     pthread_mutex_lock(&ht->mutex);
-#endif // _LOCK
-    //-----------------------------------------
-    hash_t h = hashtable_walk(ht, data, true);
-    if ((h < ht->lines_count) && ht->lines[h].busy &&
-        !ht->key_comp(&ht->lines[h].data.key, &data->key)) {
+    if (hashtable_walk(ht, data, &h) && !ttl_completed(ht->lines[h].data.ttl)) {
         *data = ht->lines[h].data;
-    } else {
-        h = ht->lines_count;
+        miss = false;
     }
-    //-----------------------------------------
-#ifdef _LOCK
     pthread_mutex_unlock(&ht->mutex);
-#endif // _LOCK
-    //-----------------------------------------
-    return (h == ht->lines_count);
+    return miss;
 }
 bool hashtable_set(hashtable* ht, ht_rec* data)
 {
-#ifdef _LOCK
+    bool full = true;
+    size_t h;
+
     pthread_mutex_lock(&ht->mutex);
-#endif // _LOCK
-    //-----------------------------------------
-    hash_t h = hashtable_walk(ht, data, false);
-    if ((h < ht->lines_count) &&
-        (!ht->lines[h].busy || !ht->key_comp(&ht->lines[h].data.key, &data->key))) {
+    hashtable_walk(ht, data, &h);
+    if (h < ht->lines_count) {
         ht->lines[h].data = *data;
         ht->lines[h].busy = true;
-    } else
-        h = ht->lines_count;
-        //-----------------------------------------
-#ifdef _LOCK
+        full = false;
+    }
     pthread_mutex_unlock(&ht->mutex);
-#endif // _LOCK
-    //-----------------------------------------
-    return (h == ht->lines_count);
+    return full;
 }
 //-----------------------------------------

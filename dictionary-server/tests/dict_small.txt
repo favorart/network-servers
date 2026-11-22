@@ -1,0 +1,22 @@
+apple 50
+apricot 70
+banana 10
+x01 5
+x02 80
+x03 17
+x04 99
+x05 0
+x06 42
+x07 63
+x08 17
+x09 8
+x10 71
+x11 25
+x12 90
+broken-line-without-weight
+yaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 77
+yes 3
+абаз 86
+абазин 92
+абазинец 49
+абак 27

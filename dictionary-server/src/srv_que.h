@@ -44,12 +44,13 @@ struct workqueue
 
 /**
  * @brief Init the queue and start @p n_workers worker threads (at least 1).
- * @return 0, or -1 if a worker could not be allocated or started.
+ * @return 0, or -1 if a worker could not be allocated or started (the queue is then freed).
  */
 int wque_init(wque_t* wq, int n_workers);
-/** @brief Tell all workers to stop and wake them up; waiting jobs are dropped. */
+/** @brief Tell all workers to stop, wait for them (each finishes its current job) and
+ *        free them; waiting jobs are dropped. */
 void wque_free(wque_t* wq);
-/** @brief Add a job to the queue and wake up one worker. */
+/** @brief Add a job to the queue and wake up one worker; jobs run in FIFO order. */
 void wque_push(wque_t* wq, job_t* job);
 
 //-----------------------------------------
@@ -58,6 +59,8 @@ void wque_push(wque_t* wq, job_t* job);
     {                                                                                              \
         item->prev = NULL;                                                                         \
         item->next = list;                                                                         \
+        if (list != NULL)                                                                          \
+            list->prev = item;                                                                     \
         list = item;                                                                               \
     }
 /** @brief Unlink @p item from the doubly linked @p list. */

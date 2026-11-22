@@ -116,11 +116,11 @@ void server_config_print(srv_conf* conf, FILE* stream)
 }
 void server_config_free(srv_conf* conf)
 {
+    /* Stop the workers first: their clients use the cache. */
+    wque_free(&conf->workqueue);
     //-----------------------
     hashtable_free(conf->ht);
     free(conf->ht);
-    //-----------------------
-    wque_free(&conf->workqueue);
     //-----------------------
     memset(conf, 0, sizeof(*conf));
 }
@@ -129,7 +129,8 @@ static void print_usage(FILE* stream, const char* prog)
 {
     fprintf(stream,
             "usage: %s [-p PORT] [-i IP] [-w WORKERS] [-d DICT] [-v] [-h]\n"
-            "  -p, --port PORT      TCP port to listen on (default 8080)\n"
+            "  -p, --port PORT      TCP port to listen on (default 8080; 0: any free port;\n"
+            "                       the server prints \"listening on IP:PORT\")\n"
             "  -i, --ip IP          IPv4 address to bind (default 0.0.0.0)\n"
             "  -w, --workers N      worker threads, 1..%u (default 4)\n"
             "  -d, --dict FILE      dictionary file (default: ./" SRV_DICT_FLNAME " if it exists,\n"
