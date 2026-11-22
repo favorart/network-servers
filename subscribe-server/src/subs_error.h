@@ -1,10 +1,7 @@
-#include "stdafx.h"
-
 #ifndef _SRV_ERROR_H_
 #define _SRV_ERROR_H_
 
 // #define _DEBUG
-// #define MULTI_PROCESS
 //-----------------------------------------
 /** @brief Server error codes. */
 typedef enum

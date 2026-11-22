@@ -1,7 +1,10 @@
-#include "stdafx.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #include "subs_error.h"
-#include "subs_server.h"
 #include "subs_queues.h"
+#include "subs_server.h"
 
 void QueuesManager::broadcast(struct server_config* config)
 {
@@ -14,7 +17,7 @@ void QueuesManager::broadcast(struct server_config* config)
             for (client* Client : config->clients) {
                 struct evbuffer* buf_out = bufferevent_get_output(Client->b_ev);
                 if (Client->queues_subscribed->find(i) != Client->queues_subscribed->end())
-                    evbuffer_add_printf(buf_out, "<que %u>  %s%s", i, message.c_str(),
+                    evbuffer_add_printf(buf_out, "<que %zu>  %s%s", i, message.c_str(),
                                         (message[message.size() - 1] == '\n') ? "" : "\n");
             }
             queues_[i].pop();
@@ -44,7 +47,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
 
     while ((cmd = evbuffer_readln(buf_in, &cmd_length, EVBUFFER_EOL_ANY))) {
         char* cmd_cur_char = cmd;
-        size_t n = 0U;
+        int n = 0;
         //-----------------------------------------------------------------
         size_t queue_no = 0U;
 
@@ -55,7 +58,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
 
             /* subscribe */
             if (!strcmp(cmd_head, cmd_sub)) {
-                if (1 == sscanf(cmd_cur_char, "%u%n", &queue_no, &n)) {
+                if (1 == sscanf(cmd_cur_char, "%zu%n", &queue_no, &n)) {
                     cmd_cur_char += n;
 
                     if (queue_no >= Client->config->queues_manager->n()) {
@@ -65,7 +68,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
                         Client->queues_subscribed->insert(queue_no);
                     }
 #ifdef _DEBUG
-                    printf("%s %u answ=%d\n", cmd_sub, queue_no, !no_answer);
+                    printf("%s %zu answ=%d\n", cmd_sub, queue_no, !no_answer);
 #endif // _DEBUG
                 } else {
                     no_answer = 2;
@@ -76,7 +79,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
             /* publish */
             else if (!strncmp(cmd_head, cmd_pub, 7U)) {
                 /* try to read the parameters */
-                if (1 == sscanf(cmd_cur_char, "%u%n", &queue_no, &n)) {
+                if (1 == sscanf(cmd_cur_char, "%zu%n", &queue_no, &n)) {
                     cmd_cur_char += n;
 
                     if (queue_no >= Client->config->queues_manager->n()) {
@@ -86,7 +89,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
                         Client->config->queues_manager->publish(queue_no, cmd_cur_char);
                     }
 #ifdef _DEBUG
-                    printf("%s %u %s answ=%d\n", cmd_pub, queue_no, cmd_cur_char, !no_answer);
+                    printf("%s %zu %s answ=%d\n", cmd_pub, queue_no, cmd_cur_char, !no_answer);
 #endif // _DEBUG
                 } else {
                     no_answer = 2;
@@ -104,7 +107,7 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
         }
         //-----------------------------------------------------------------
         if (!no_answer) {
-            evbuffer_add_printf(buf_out, "ok <que %u>\n", queue_no);
+            evbuffer_add_printf(buf_out, "ok <que %zu>\n", queue_no);
         } else {
             evbuffer_add_printf(buf_out, "error : %s\n", err_answer);
             //-----------------------------------------------------------------
@@ -116,8 +119,6 @@ void subscribe_handling(client* Client, struct evbuffer* buf_in, struct evbuffer
         free(cmd);
     }
     //-----------------------------------------------------------------
-HNDL_FREE:;
-    free(cmd);
     evbuffer_drain(buf_in, -1);
     return;
 }

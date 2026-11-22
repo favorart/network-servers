@@ -1,5 +1,12 @@
-#include "stdafx.h"
-#include "subs_error.h"
+#include <cerrno>
+#include <csignal>
+#include <cstring>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
 #include "subs_server.h"
 
 //-----------------------------------------
@@ -7,12 +14,9 @@ int main(int argc, char** argv)
 {
     int result = 0;
 
-    struct server_config server_conf = {0};
+    struct server_config server_conf;
     int MasterSocket = -1;
-    //-------------------------------------------
-    /* Master Process */
     struct event* sigint_event = NULL;
-    struct event* sigchld_event = NULL;
     //-------------------------------------------
     /* Read the server configuration from the command-line parameters */
     if (parse_console_parameters(argc, argv, &server_conf)) {
@@ -20,12 +24,9 @@ int main(int argc, char** argv)
         result = 1;
         goto MARK_FREE;
     }
-    // server_config_init (&server_conf, NULL, NULL, NULL, NULL, NULL);
 
-    /* Master Process */
-    if (!server_conf.myself) {
-        server_config_print(&server_conf, stdout);
-
+    server_config_print(&server_conf, stdout);
+    {
         /* Create the listening socket */
         if (-1 == (MasterSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP))) {
             fprintf(stderr, "%s\n", strerror(errno));
@@ -41,7 +42,7 @@ int main(int argc, char** argv)
             goto MARK_FREE;
         }
 
-        struct sockaddr_in SockAddr = {0};
+        struct sockaddr_in SockAddr = {};
         SockAddr.sin_family = AF_INET;
         SockAddr.sin_port = htons(server_conf.port);
         SockAddr.sin_addr.s_addr = inet_addr(server_conf.ip);
@@ -84,42 +85,25 @@ int main(int argc, char** argv)
         goto MARK_FREE;
     }
 
-#ifdef MULTI_PROCESS
-    sigchld_event = evsignal_new(server_conf.base, SIGCHLD, subs_sigchld_cb, (void*)&server_conf);
-    if (!sigchld_event || event_add(sigchld_event, NULL) < 0) {
-        fprintf(stderr, "Could not create/add the SIGCHLD signal event.\n");
-        result = 1;
-        goto MARK_FREE;
-    }
-#endif
-
     //-------------------------------------------
-    /* Init events */
-    struct event ev;
-
-    /* Master Process */
-    if (!server_conf.myself) {
-        /* Create a new event, that react to read drom server's socket - event of connecting the new
-         * client */
-        /* Set connection callback (on_connect()) to read event on server socket */
+    {
+        /* Create a new event that reacts to reads from the server socket - a new client
+         * connecting; subs_accept_cb() handles it */
+        struct event ev;
         event_set(&ev, MasterSocket, EV_READ | EV_PERSIST, subs_accept_cb, &server_conf);
-        /* Attach ev_connect event to my event base */
+        /* Attach the event to my event base */
         event_base_set(server_conf.base, &ev);
         /* Add server event without timeout */
         event_add(&ev, NULL);
-    } else {
-        event_set(&ev, server_conf.myself->fd, EV_READ | EV_PERSIST, subs_connect_cb, &server_conf);
-        event_base_set(server_conf.base, &ev);
-        event_add(&ev, NULL);
+
+        /* Dispatch events */
+        event_base_loop(server_conf.base, 0);
     }
-    /* Dispatch events */
-    event_base_loop(server_conf.base, 0);
     //-------------------------------------------
 
 MARK_FREE:
     //-------------------------------------------
     event_base_free(server_conf.base);
-    event_free(sigchld_event);
     event_free(sigint_event);
 
     shutdown(MasterSocket, SHUT_RDWR);

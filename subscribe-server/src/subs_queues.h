@@ -1,9 +1,13 @@
-#include "stdafx.h"
-
 #ifndef _SUBS_QUEUES_H_
 #define _SUBS_QUEUES_H_
+
+#include <cstddef>
+#include <queue>
+#include <string>
+#include <vector>
 //-----------------------------------------
 struct client;
+struct server_config;
 
 /** @brief Holds N message queues and delivers queued messages to subscribed clients. */
 class QueuesManager
